@@ -32,6 +32,28 @@ $start = (int) ($_GET['start'] ?? 0);
 $previousListLimit = $_SESSION['glpilist_limit'] ?? null;
 $_SESSION['glpilist_limit'] = $listLimit;
 $isExport = (($_GET['export'] ?? '') === 'csv');
+$getEntityLabel = static function (int $entityId): string {
+    static $cache = [];
+    if ($entityId <= 0) {
+        return '';
+    }
+    if (!array_key_exists($entityId, $cache)) {
+        $cache[$entityId] = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
+            Dropdown::getDropdownName('glpi_entities', $entityId)
+        );
+    }
+    return (string) $cache[$entityId];
+};
+$getUserLabel = static function (int $userId): string {
+    static $cache = [];
+    if ($userId <= 0) {
+        return '';
+    }
+    if (!array_key_exists($userId, $cache)) {
+        $cache[$userId] = (string) getUserName($userId);
+    }
+    return (string) $cache[$userId];
+};
 
 if (!in_array($type, ['tech', 'entity'], true) || $id <= 0) {
     if ($isExport) {
@@ -86,7 +108,7 @@ if ($DB->fieldExists($taskTable, 'is_deleted')) {
 $title = '';
 if ($type === 'tech') {
     $where["$taskTable.users_id_tech"] = $id;
-    $title = sprintf(__('Tickets du technicien %s', 'stats'), getUserName($id));
+    $title = sprintf(__('Tickets du technicien %s', 'stats'), $getUserLabel($id));
 
     if (!empty($filterEntities)) {
         $entityScope = [];
@@ -115,9 +137,7 @@ if ($type === 'tech') {
     if (!empty($filterTechs)) {
         $where["$taskTable.users_id_tech"] = $filterTechs;
     }
-    $entityLabel = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
-        Dropdown::getDropdownName('glpi_entities', $id)
-    );
+    $entityLabel = $getEntityLabel($id);
     $title = sprintf(__('Tickets de l entite %s', 'stats'), $entityLabel);
 }
 
@@ -260,7 +280,7 @@ if ($isExport) {
         $ticketLabel = $ticketName !== '' ? $ticketName : sprintf(__('Ticket %d', 'stats'), $ticketId);
         $entityId = (int) ($row['entities_id'] ?? 0);
         $entityLabel = $entityId > 0
-            ? \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(Dropdown::getDropdownName('glpi_entities', $entityId))
+            ? $getEntityLabel($entityId)
             : '';
         $status = (int) ($row['ticket_status'] ?? 0);
         $statusLabel = Ticket::getStatus($status);
@@ -352,7 +372,7 @@ foreach ($rows as $row) {
     $ticketLabel = $ticketName !== '' ? $ticketName : sprintf(__('Ticket %d', 'stats'), $ticketId);
     $entityId = (int) ($row['entities_id'] ?? 0);
     $entityLabel = $entityId > 0
-        ? \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(Dropdown::getDropdownName('glpi_entities', $entityId))
+        ? $getEntityLabel($entityId)
         : '';
     $status = (int) ($row['ticket_status'] ?? 0);
     $statusLabel = Ticket::getStatus($status);

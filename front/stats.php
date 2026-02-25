@@ -63,6 +63,58 @@ $infoIcon = static function (string $text): string {
     return " <span class='text-info' data-bs-toggle='tooltip' title='"
         . htmlescape($text) . "'><i class='ti ti-info-circle-filled'></i></span>";
 };
+$normalizeIntList = static function ($values): array {
+    if (!is_array($values)) {
+        $values = [$values];
+    }
+    return array_values(array_filter(array_map('intval', $values)));
+};
+$expandEntityScope = static function (array $entityIds): array {
+    static $sonsCache = [];
+
+    $scope = [];
+    foreach ($entityIds as $entityId) {
+        $entityId = (int) $entityId;
+        if ($entityId <= 0) {
+            continue;
+        }
+        if (!array_key_exists($entityId, $sonsCache)) {
+            $sons = getSonsOf('glpi_entities', $entityId);
+            if (!is_array($sons)) {
+                $sons = [$entityId];
+            }
+            $sonsCache[$entityId] = array_values(array_filter(array_map('intval', $sons)));
+        }
+        foreach ($sonsCache[$entityId] as $sonId) {
+            if ($sonId > 0) {
+                $scope[$sonId] = true;
+            }
+        }
+    }
+    return array_keys($scope);
+};
+$getEntityLabel = static function (int $entityId): string {
+    static $cache = [];
+    if ($entityId <= 0) {
+        return '';
+    }
+    if (!array_key_exists($entityId, $cache)) {
+        $cache[$entityId] = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
+            Dropdown::getDropdownName('glpi_entities', $entityId)
+        );
+    }
+    return (string) $cache[$entityId];
+};
+$getUserLabel = static function (int $userId): string {
+    static $cache = [];
+    if ($userId <= 0) {
+        return '';
+    }
+    if (!array_key_exists($userId, $cache)) {
+        $cache[$userId] = (string) getUserName($userId);
+    }
+    return (string) $cache[$userId];
+};
 
 if (!$isAjaxRequest && !$isExportRequest) {
     echo "<style>
@@ -121,35 +173,9 @@ if ($view === 'tickets') {
     $exportType = (string) ($_GET['export'] ?? '');
     $isExport = in_array($exportType, ['tech', 'entity'], true);
 
-    $selectedEntities = $_GET['ticket_entities_id'] ?? [];
-    if (!is_array($selectedEntities)) {
-        $selectedEntities = [$selectedEntities];
-    }
-    $selectedEntities = array_values(array_filter(array_map('intval', $selectedEntities)));
-
-    $selectedTechs = $_GET['technicians_id'] ?? [];
-    if (!is_array($selectedTechs)) {
-        $selectedTechs = [$selectedTechs];
-    }
-    $selectedTechs = array_values(array_filter(array_map('intval', $selectedTechs)));
-
-    $entityScope = [];
-    foreach ($selectedEntities as $entityId) {
-        if ($entityId <= 0) {
-            continue;
-        }
-        $sons = getSonsOf('glpi_entities', $entityId);
-        if (!is_array($sons)) {
-            $sons = [$entityId];
-        }
-        foreach ($sons as $sonId) {
-            $sonId = (int) $sonId;
-            if ($sonId > 0) {
-                $entityScope[$sonId] = true;
-            }
-        }
-    }
-    $entityScope = array_keys($entityScope);
+    $selectedEntities = $normalizeIntList($_GET['ticket_entities_id'] ?? []);
+    $selectedTechs = $normalizeIntList($_GET['technicians_id'] ?? []);
+    $entityScope = $expandEntityScope($selectedEntities);
 
     $taskTable = 'glpi_tickettasks';
     $ticketTable = 'glpi_tickets';
@@ -385,7 +411,7 @@ if ($view === 'tickets') {
         $techChartData = [];
         foreach ($techTotals as $row) {
             $techId = (int) ($row['tech_id'] ?? 0);
-            $name = $techId > 0 ? getUserName($techId) : '';
+            $name = $techId > 0 ? $getUserLabel($techId) : '';
             $techChartData[] = [
                 'name'  => $name,
                 'value' => round(((int) $row['seconds']) / HOUR_TIMESTAMP, 2),
@@ -395,7 +421,7 @@ if ($view === 'tickets') {
         foreach ($entityTotals as $row) {
             $entityId = (int) ($row['entities_id'] ?? 0);
             $label = $entityId > 0
-                ? \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(Dropdown::getDropdownName('glpi_entities', $entityId))
+                ? $getEntityLabel($entityId)
                 : '';
             $entityChartData[] = [
                 'name'  => $label,
@@ -423,7 +449,7 @@ if ($view === 'tickets') {
                 fputcsv($out, $headers, ';');
                 foreach ($techTotals as $row) {
                     $techId = (int) ($row['tech_id'] ?? 0);
-                    $name = $techId > 0 ? getUserName($techId) : '';
+                    $name = $techId > 0 ? $getUserLabel($techId) : '';
                     $csvRow = [
                         $name,
                         (string) ((int) ($row['ticket_count'] ?? 0)),
@@ -449,7 +475,7 @@ if ($view === 'tickets') {
                 foreach ($entityTotals as $row) {
                     $entityId = (int) ($row['entities_id'] ?? 0);
                     $label = $entityId > 0
-                        ? \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(Dropdown::getDropdownName('glpi_entities', $entityId))
+                        ? $getEntityLabel($entityId)
                         : '';
                     $csvRow = [
                         $label,
@@ -518,9 +544,9 @@ if ($view === 'tickets') {
             $techRows,
             __('Technicien', 'stats'),
             __('Tickets', 'stats'),
-            function (array $row) use ($formatHours, $formatCredit, $techCreditTotalsMap, $buildModalUrl, $dateBegin, $dateEnd, $selectedEntities, $includeCredit) {
+            function (array $row) use ($formatHours, $formatCredit, $techCreditTotalsMap, $buildModalUrl, $dateBegin, $dateEnd, $selectedEntities, $includeCredit, $getUserLabel) {
                 $techId = (int) ($row['tech_id'] ?? 0);
-                $name = $techId > 0 ? getUserName($techId) : '';
+                $name = $techId > 0 ? $getUserLabel($techId) : '';
                 $modalParams = [
                     'type'       => 'tech',
                     'id'         => $techId,
@@ -559,10 +585,10 @@ if ($view === 'tickets') {
             $entityRows,
             __('Entite', 'stats'),
             __('Tickets', 'stats'),
-            function (array $row) use ($formatHours, $formatCredit, $entityCreditTotalsMap, $buildModalUrl, $dateBegin, $dateEnd, $selectedTechs, $includeCredit) {
+            function (array $row) use ($formatHours, $formatCredit, $entityCreditTotalsMap, $buildModalUrl, $dateBegin, $dateEnd, $selectedTechs, $includeCredit, $getEntityLabel) {
                 $entityId = (int) ($row['entities_id'] ?? 0);
                 $label = $entityId > 0
-                    ? \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(Dropdown::getDropdownName('glpi_entities', $entityId))
+                    ? $getEntityLabel($entityId)
                     : '';
                 $modalParams = [
                     'type'       => 'entity',
@@ -1074,35 +1100,9 @@ if ($view === 'satisfaction') {
     $questionType = (string) ($currentQuestion['type'] ?? 'rating');
     $questionScale = (int) ($currentQuestion['scale'] ?? 5);
 
-    $selectedEntities = $_GET['satisfaction_entities_id'] ?? [];
-    if (!is_array($selectedEntities)) {
-        $selectedEntities = [$selectedEntities];
-    }
-    $selectedEntities = array_values(array_filter(array_map('intval', $selectedEntities)));
-
-    $selectedTechs = $_GET['satisfaction_technicians_id'] ?? [];
-    if (!is_array($selectedTechs)) {
-        $selectedTechs = [$selectedTechs];
-    }
-    $selectedTechs = array_values(array_filter(array_map('intval', $selectedTechs)));
-
-    $entityScope = [];
-    foreach ($selectedEntities as $entityId) {
-        if ($entityId <= 0) {
-            continue;
-        }
-        $sons = getSonsOf('glpi_entities', $entityId);
-        if (!is_array($sons)) {
-            $sons = [$entityId];
-        }
-        foreach ($sons as $sonId) {
-            $sonId = (int) $sonId;
-            if ($sonId > 0) {
-                $entityScope[$sonId] = true;
-            }
-        }
-    }
-    $entityScope = array_keys($entityScope);
+    $selectedEntities = $normalizeIntList($_GET['satisfaction_entities_id'] ?? []);
+    $selectedTechs = $normalizeIntList($_GET['satisfaction_technicians_id'] ?? []);
+    $entityScope = $expandEntityScope($selectedEntities);
 
     $baseWhere = [
         'question_key' => $questionKey,
@@ -1245,7 +1245,7 @@ if ($view === 'satisfaction') {
         if ($exportType === 'tech') {
             foreach ($techRows as $row) {
                 $techId = (int) ($row['tech_id'] ?? 0);
-                $name = $techId > 0 ? getUserName($techId) : '';
+                $name = $techId > 0 ? $getUserLabel($techId) : '';
                 $responses = (int) ($row['responses'] ?? 0);
                 $score = $formatScore((float) ($row['avg_value'] ?? 0), $responses > 0);
                 fputcsv($out, [
@@ -1258,9 +1258,7 @@ if ($view === 'satisfaction') {
             foreach ($entityRows as $row) {
                 $entityId = (int) ($row['entities_id'] ?? 0);
                 $label = $entityId > 0
-                    ? \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
-                        Dropdown::getDropdownName('glpi_entities', $entityId)
-                    )
+                    ? $getEntityLabel($entityId)
                     : '';
                 $responses = (int) ($row['responses'] ?? 0);
                 $score = $formatScore((float) ($row['avg_value'] ?? 0), $responses > 0);
@@ -1428,17 +1426,12 @@ if ($view === 'satisfaction') {
         return $base . '?' . http_build_query($params);
     };
 
-    $buildEntityLabel = static function (int $entityId): string {
-        if ($entityId <= 0) {
-            return '';
-        }
-        return \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
-            Dropdown::getDropdownName('glpi_entities', $entityId)
-        );
+    $buildEntityLabel = static function (int $entityId) use ($getEntityLabel): string {
+        return $getEntityLabel($entityId);
     };
 
-    $buildTechLabel = static function (int $techId): string {
-        return $techId > 0 ? getUserName($techId) : '';
+    $buildTechLabel = static function (int $techId) use ($getUserLabel): string {
+        return $getUserLabel($techId);
     };
 
     $entityAvgRows = array_filter($entityRows, function (array $row): bool {
@@ -1518,9 +1511,9 @@ if ($view === 'satisfaction') {
         $techPageRows,
         __('Technicien', 'stats'),
         $scoreHeader,
-        function (array $row) use ($formatNumber, $formatScore, $buildModalUrl, $questionKey, $dateBegin, $dateEnd, $selectedEntities) {
+        function (array $row) use ($formatNumber, $formatScore, $buildModalUrl, $questionKey, $dateBegin, $dateEnd, $selectedEntities, $getUserLabel) {
             $techId = (int) ($row['tech_id'] ?? 0);
-            $name = $techId > 0 ? getUserName($techId) : '';
+            $name = $techId > 0 ? $getUserLabel($techId) : '';
             $responses = (int) ($row['responses'] ?? 0);
             $score = $formatScore((float) ($row['avg_value'] ?? 0), $responses > 0);
             $link = '';
@@ -1557,10 +1550,10 @@ if ($view === 'satisfaction') {
         $entityPageRows,
         __('Entite', 'stats'),
         $scoreHeader,
-        function (array $row) use ($formatNumber, $formatScore, $buildModalUrl, $questionKey, $dateBegin, $dateEnd, $selectedTechs) {
+        function (array $row) use ($formatNumber, $formatScore, $buildModalUrl, $questionKey, $dateBegin, $dateEnd, $selectedTechs, $getEntityLabel) {
             $entityId = (int) ($row['entities_id'] ?? 0);
             $label = $entityId > 0
-                ? \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(Dropdown::getDropdownName('glpi_entities', $entityId))
+                ? $getEntityLabel($entityId)
                 : '';
             $responses = (int) ($row['responses'] ?? 0);
             $score = $formatScore((float) ($row['avg_value'] ?? 0), $responses > 0);
@@ -2042,9 +2035,7 @@ if ($shouldRunCredits) {
         foreach ($DB->request($topCreditsCriteria) as $row) {
             $entityId = (int) ($row['entities_id'] ?? 0);
             if ($entityId > 0 && !array_key_exists($entityId, $entityLabels)) {
-                $entityLabels[$entityId] = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
-                    Dropdown::getDropdownName('glpi_entities', $entityId)
-                );
+                $entityLabels[$entityId] = $getEntityLabel($entityId);
             }
             $row['entity_label'] = $entityLabels[$entityId] ?? '';
             $topCredits[] = $row;
@@ -2070,9 +2061,7 @@ if ($shouldRunCredits) {
                 continue;
             }
             if (!array_key_exists($entityId, $topEntityLabels)) {
-                $topEntityLabels[$entityId] = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
-                    Dropdown::getDropdownName('glpi_entities', $entityId)
-                );
+                $topEntityLabels[$entityId] = $getEntityLabel($entityId);
             }
             $topEntities[] = [
                 'name'  => $topEntityLabels[$entityId] ?? (string) $entityId,
@@ -2261,9 +2250,7 @@ if ($statsEntityId <= 0 && !empty($topEntities)) {
 }
 
 if ($statsEntityId > 0) {
-    $entityLabel = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
-        Dropdown::getDropdownName('glpi_entities', $statsEntityId)
-    );
+    $entityLabel = $getEntityLabel($statsEntityId);
     echo "<div class='card mt-3'><div class='card-body'>";
     echo "<h3 class='h6 mb-3'>" . __('Statistiques pour', 'stats') . " " . htmlescape($entityLabel)
         . $infoIcon($tooltipStatsEntity) . "</h3>";

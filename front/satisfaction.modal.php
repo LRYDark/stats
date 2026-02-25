@@ -11,6 +11,28 @@ Session::checkRight(PluginStatsProfile::$rightname, PluginStatsProfile::RIGHT_RE
 $type = $_GET['type'] ?? '';
 $id = (int) ($_GET['id'] ?? 0);
 $isExport = (($_GET['export'] ?? '') === 'csv');
+$getEntityLabel = static function (int $entityId): string {
+    static $cache = [];
+    if ($entityId <= 0) {
+        return '';
+    }
+    if (!array_key_exists($entityId, $cache)) {
+        $cache[$entityId] = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
+            Dropdown::getDropdownName('glpi_entities', $entityId)
+        );
+    }
+    return (string) $cache[$entityId];
+};
+$getUserLabel = static function (int $userId): string {
+    static $cache = [];
+    if ($userId <= 0) {
+        return '';
+    }
+    if (!array_key_exists($userId, $cache)) {
+        $cache[$userId] = (string) getUserName($userId);
+    }
+    return (string) $cache[$userId];
+};
 
 if (!in_array($type, ['tech', 'entity'], true) || $id <= 0) {
     if ($isExport) {
@@ -196,6 +218,8 @@ if ($isExport) {
             "$ticketTable.status AS ticket_status",
             new QueryExpression("MAX($answersTable.entities_id) AS entities_id"),
             new QueryExpression("MAX($answersTable.users_id_technician) AS tech_id"),
+            new QueryExpression("MAX($answersTable.answer_value) AS answer_value"),
+            new QueryExpression("MAX($answersTable.answer_text) AS answer_text"),
             "$answersTable.date_answered AS date_answered",
         ],
         'FROM' => $answersTable,
@@ -229,14 +253,20 @@ if (!$isExport) {
 foreach ($DB->request($rowsRequest) as $row) {
     $rows[] = $row;
 }
+$rowTicketIds = [];
+foreach ($rows as $row) {
+    $ticketId = (int) ($row['tickets_id'] ?? 0);
+    if ($ticketId > 0) {
+        $rowTicketIds[$ticketId] = $ticketId;
+    }
+}
+$rowTicketIds = array_values($rowTicketIds);
 
 $title = '';
 if ($type === 'tech') {
-    $title = sprintf(__('Satisfaction du technicien %s', 'stats'), getUserName($id));
+    $title = sprintf(__('Satisfaction du technicien %s', 'stats'), $getUserLabel($id));
 } else {
-    $entityLabel = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
-        Dropdown::getDropdownName('glpi_entities', $id)
-    );
+    $entityLabel = $getEntityLabel($id);
     $title = sprintf(__('Satisfaction de l entite %s', 'stats'), $entityLabel);
 }
 
@@ -255,25 +285,29 @@ $formatAnswer = static function (string $value) use ($questionType, $questionSca
 };
 
 $answerLookup = [];
-foreach ($DB->request([
-    'SELECT' => [
-        "$answersTable.tickets_id AS ticket_id",
-        "$answersTable.date_answered AS date_answered",
-        "$answersTable.answer_value AS answer_value",
-        "$answersTable.answer_text AS answer_text",
-    ],
-    'FROM' => $answersTable,
-    'WHERE' => $responseWhere,
-]) as $row) {
-    $ticketId = (int) ($row['ticket_id'] ?? 0);
-    $dateAnsweredRaw = (string) ($row['date_answered'] ?? '');
-    if ($ticketId <= 0 || $dateAnsweredRaw === '') {
-        continue;
+if (!$isExport && !empty($rowTicketIds)) {
+    $answerWhere = $responseWhere;
+    $answerWhere["$answersTable.tickets_id"] = $rowTicketIds;
+    foreach ($DB->request([
+        'SELECT' => [
+            "$answersTable.tickets_id AS ticket_id",
+            "$answersTable.date_answered AS date_answered",
+            "$answersTable.answer_value AS answer_value",
+            "$answersTable.answer_text AS answer_text",
+        ],
+        'FROM' => $answersTable,
+        'WHERE' => $answerWhere,
+    ]) as $row) {
+        $ticketId = (int) ($row['ticket_id'] ?? 0);
+        $dateAnsweredRaw = (string) ($row['date_answered'] ?? '');
+        if ($ticketId <= 0 || $dateAnsweredRaw === '') {
+            continue;
+        }
+        $answerText = trim((string) ($row['answer_text'] ?? ''));
+        $answerValue = trim((string) ($row['answer_value'] ?? ''));
+        $value = $answerText !== '' ? $answerText : $answerValue;
+        $answerLookup[$ticketId . '|' . $dateAnsweredRaw] = $formatAnswer($value);
     }
-    $answerText = trim((string) ($row['answer_text'] ?? ''));
-    $answerValue = trim((string) ($row['answer_value'] ?? ''));
-    $value = $answerText !== '' ? $answerText : $answerValue;
-    $answerLookup[$ticketId . '|' . $dateAnsweredRaw] = $formatAnswer($value);
 }
 
 if ($isExport) {
@@ -506,13 +540,16 @@ if ($isExport) {
         $ticketLabel = $ticketName !== '' ? $ticketName : sprintf(__('Ticket %d', 'stats'), $ticketId);
         $entityId = (int) ($row['entities_id'] ?? 0);
         $entityLabel = $entityId > 0
-            ? \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(Dropdown::getDropdownName('glpi_entities', $entityId))
+            ? $getEntityLabel($entityId)
             : '';
         $techId = (int) ($row['tech_id'] ?? 0);
-        $techName = $techId > 0 ? getUserName($techId) : '';
+        $techName = $techId > 0 ? $getUserLabel($techId) : '';
         $dateAnsweredRaw = (string) ($row['date_answered'] ?? '');
         $dateAnswered = $dateAnsweredRaw !== '' ? substr($dateAnsweredRaw, 0, 16) : '';
-        $answerLabel = $answerLookup[$ticketId . '|' . ($row['date_answered'] ?? '')] ?? '';
+        $rowAnswerText = trim((string) ($row['answer_text'] ?? ''));
+        $rowAnswerValue = trim((string) ($row['answer_value'] ?? ''));
+        $rowAnswer = $rowAnswerText !== '' ? $rowAnswerText : $rowAnswerValue;
+        $answerLabel = $rowAnswer !== '' ? $formatAnswer($rowAnswer) : '';
         $csvRow = [
             $ticketId,
             $ticketLabel,
@@ -598,10 +635,10 @@ foreach ($rows as $row) {
     $ticketLabel = $ticketName !== '' ? $ticketName : sprintf(__('Ticket %d', 'stats'), $ticketId);
     $entityId = (int) ($row['entities_id'] ?? 0);
     $entityLabel = $entityId > 0
-        ? \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(Dropdown::getDropdownName('glpi_entities', $entityId))
+        ? $getEntityLabel($entityId)
         : '';
     $techId = (int) ($row['tech_id'] ?? 0);
-    $techName = $techId > 0 ? getUserName($techId) : '';
+    $techName = $techId > 0 ? $getUserLabel($techId) : '';
     $dateAnsweredRaw = (string) ($row['date_answered'] ?? '');
     $dateAnswered = $dateAnsweredRaw !== '' ? substr($dateAnsweredRaw, 0, 16) : '';
     $answerLabel = $answerLookup[$ticketId . '|' . $dateAnsweredRaw] ?? '-';
