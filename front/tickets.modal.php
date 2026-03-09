@@ -98,6 +98,7 @@ $filterTechs = array_values(array_filter(array_map('intval', $filterTechs)));
 
 $taskTable = 'glpi_tickettasks';
 $ticketTable = 'glpi_tickets';
+$entityScope = [];
 $where = [
     "$taskTable.actiontime" => ['>', 0],
 ];
@@ -108,10 +109,9 @@ if ($DB->fieldExists($taskTable, 'is_deleted')) {
 $title = '';
 if ($type === 'tech') {
     $where["$taskTable.users_id_tech"] = $id;
-    $title = sprintf(__('Tickets du technicien %s', 'stats'), $getUserLabel($id));
+    $title = sprintf(__('Tâches (Tickets) du technicien %s', 'stats'), $getUserLabel($id));
 
     if (!empty($filterEntities)) {
-        $entityScope = [];
         foreach ($filterEntities as $entityId) {
             if ($entityId <= 0) {
                 continue;
@@ -198,6 +198,36 @@ if (!$isExport) {
 }
 foreach ($DB->request($rowsRequest) as $row) {
     $rows[] = $row;
+}
+
+$createdTicketCount = null;
+if ($type === 'tech' && $DB->fieldExists($ticketTable, 'users_id_recipient')) {
+    $createdWhere = [
+        "$ticketTable.users_id_recipient" => $id,
+    ];
+    if (!empty($entityScope)) {
+        $createdWhere["$ticketTable.entities_id"] = $entityScope;
+    }
+    if ($dateStart !== '' || $dateStop !== '') {
+        $createdDateCriteria = [];
+        if ($dateStart !== '') {
+            $createdDateCriteria[] = ["$ticketTable.date" => ['>=', $dateStart]];
+        }
+        if ($dateStop !== '') {
+            $createdDateCriteria[] = ["$ticketTable.date" => ['<=', $dateStop]];
+        }
+        if (!empty($createdDateCriteria)) {
+            $createdWhere['AND'] = $createdDateCriteria;
+        }
+    }
+    $createdCountRow = $DB->request([
+        'SELECT' => [
+            new QueryExpression("COUNT(DISTINCT $ticketTable.id) AS total"),
+        ],
+        'FROM' => $ticketTable,
+        'WHERE' => $createdWhere,
+    ])->current();
+    $createdTicketCount = (int) ($createdCountRow['total'] ?? 0);
 }
 
 $formatHours = static function (int $seconds): string {
@@ -312,6 +342,15 @@ if ($isExport) {
 }
 
 Html::popHeader(__('Details tickets', 'stats'), $_SERVER['PHP_SELF'], true);
+
+if ($type === 'tech' && $createdTicketCount !== null) {
+    echo "<div class='mb-3 fw-semibold fs-3'>"
+        . htmlescape(sprintf(__('Nombre de ticket créé par le technicien : %d', 'stats'), $createdTicketCount))
+        . "</div>";
+    echo "<div class='mb-3' style='font-size: 1rem;'>"
+        . htmlescape(__('Le tableau ci-dessous liste les tickets contenant des tâches associées au technicien sélectionné. Ce total peut donc être différent du nombre de tickets créés ci-dessus.', 'stats'))
+        . "</div>";
+}
 
 if (empty($rows)) {
     echo "<div class='alert alert-warning'>";

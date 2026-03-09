@@ -336,6 +336,7 @@ if ($view === 'tickets') {
 
         $techTotalsMap = [];
         $techTicketsMap = [];
+        $techCreatedTicketsMap = [];
         $entityTotalsMap = [];
         foreach ($DB->request([
             'SELECT' => [
@@ -377,6 +378,43 @@ if ($view === 'tickets') {
                 $entityTicketsMap[$entityId] = (int) ($row['ticket_count'] ?? 0);
             }
         }
+        if ($DB->fieldExists($ticketTable, 'users_id_recipient')) {
+            $creatorTechIds = array_values(array_filter(array_map('intval', array_keys($techTotalsMap))));
+            if (!empty($creatorTechIds)) {
+                $createdWhere = [
+                    "$ticketTable.users_id_recipient" => $creatorTechIds,
+                ];
+                if (!empty($entityScope)) {
+                    $createdWhere["$ticketTable.entities_id"] = $entityScope;
+                }
+                if ($dateStart !== '' || $dateStop !== '') {
+                    $createdDateCriteria = [];
+                    if ($dateStart !== '') {
+                        $createdDateCriteria[] = ["$ticketTable.date" => ['>=', $dateStart]];
+                    }
+                    if ($dateStop !== '') {
+                        $createdDateCriteria[] = ["$ticketTable.date" => ['<=', $dateStop]];
+                    }
+                    if (!empty($createdDateCriteria)) {
+                        $createdWhere['AND'] = $createdDateCriteria;
+                    }
+                }
+                foreach ($DB->request([
+                    'SELECT' => [
+                        "$ticketTable.users_id_recipient AS tech_id",
+                        new QueryExpression("COUNT(DISTINCT $ticketTable.id) AS created_ticket_count"),
+                    ],
+                    'FROM' => $ticketTable,
+                    'WHERE' => $createdWhere,
+                    'GROUPBY' => ["$ticketTable.users_id_recipient"],
+                ]) as $row) {
+                    $techId = (int) ($row['tech_id'] ?? 0);
+                    if ($techId > 0) {
+                        $techCreatedTicketsMap[$techId] = (int) ($row['created_ticket_count'] ?? 0);
+                    }
+                }
+            }
+        }
         arsort($techTotalsMap);
         arsort($entityTotalsMap);
 
@@ -386,6 +424,7 @@ if ($view === 'tickets') {
                 'tech_id' => (int) $techId,
                 'seconds' => (int) $seconds,
                 'ticket_count' => (int) ($techTicketsMap[$techId] ?? 0),
+                'created_ticket_count' => (int) ($techCreatedTicketsMap[$techId] ?? 0),
             ];
         }
         $entityTotals = [];
@@ -441,6 +480,7 @@ if ($view === 'tickets') {
                 $headers = [
                     __('Technicien', 'stats'),
                     __('Tickets', 'stats'),
+                    __('Ticket créé', 'stats'),
                     __('Temps tâche', 'stats'),
                 ];
                 if ($includeCredit) {
@@ -453,6 +493,7 @@ if ($view === 'tickets') {
                     $csvRow = [
                         $name,
                         (string) ((int) ($row['ticket_count'] ?? 0)),
+                        (string) ((int) ($row['created_ticket_count'] ?? 0)),
                         $formatHours((int) ($row['seconds'] ?? 0)),
                     ];
                     if ($includeCredit) {
@@ -508,7 +549,8 @@ if ($view === 'tickets') {
             int $totalCount,
             string $pagerTarget,
             string $pagerQuery,
-            bool $includeCredit
+            bool $includeCredit,
+            ?string $createdTicketsHeader = null
         ): string {
             ob_start();
             if ($totalCount > 0) {
@@ -519,13 +561,16 @@ if ($view === 'tickets') {
             echo "<thead><tr>";
             echo "<th>" . $firstHeader . "</th>";
             echo "<th class='text-end'>" . $ticketsHeader . "</th>";
+            if ($createdTicketsHeader !== null) {
+                echo "<th class='text-end'>" . $createdTicketsHeader . "</th>";
+            }
             echo "<th class='text-end'>" . __('Temps tâche', 'stats') . "</th>";
             if ($includeCredit) {
                 echo "<th class='text-end'>" . __('Temps credit', 'stats') . "</th>";
             }
             echo "</tr></thead><tbody>";
             if (empty($rows)) {
-                $colspan = $includeCredit ? 4 : 3;
+                $colspan = 3 + ($createdTicketsHeader !== null ? 1 : 0) + ($includeCredit ? 1 : 0);
                 echo "<tr><td colspan='" . $colspan . "' class='text-center text-muted'>"
                     . __('Aucune donnee a afficher.', 'stats') . "</td></tr>";
             } else {
@@ -543,7 +588,7 @@ if ($view === 'tickets') {
         $techTableHtml = $buildTable(
             $techRows,
             __('Technicien', 'stats'),
-            __('Tickets', 'stats'),
+            __('Tâches (ticket)', 'stats'),
             function (array $row) use ($formatHours, $formatCredit, $techCreditTotalsMap, $buildModalUrl, $dateBegin, $dateEnd, $selectedEntities, $includeCredit, $getUserLabel) {
                 $techId = (int) ($row['tech_id'] ?? 0);
                 $name = $techId > 0 ? $getUserLabel($techId) : '';
@@ -557,7 +602,7 @@ if ($view === 'tickets') {
                     $modalParams['entities_id'] = $selectedEntities;
                 }
                 $modalUrl = $buildModalUrl($modalParams) . '&_in_modal=1';
-                $title = sprintf(__('Tickets du technicien %s', 'stats'), $name);
+                $title = sprintf(__('Tâches (Tickets) du technicien %s', 'stats'), $name);
                 $link = $name !== ''
                     ? "<a href='#' class='stats-ticket-modal' data-modal-url='"
                         . htmlescape($modalUrl) . "' data-modal-title='" . htmlescape($title) . "'>"
@@ -566,6 +611,7 @@ if ($view === 'tickets') {
                 echo "<tr>";
                 echo "<td>" . $link . "</td>";
                 echo "<td class='text-end'>" . htmlescape((string) ($row['ticket_count'] ?? 0)) . "</td>";
+                echo "<td class='text-end'>" . htmlescape((string) ($row['created_ticket_count'] ?? 0)) . "</td>";
                 echo "<td class='text-end'>" . $formatHours((int) $row['seconds']) . "</td>";
                 if ($includeCredit) {
                     $creditValue = (float) ($techCreditTotalsMap[$techId] ?? 0);
@@ -578,7 +624,8 @@ if ($view === 'tickets') {
             $techTotalCount,
             $pagerTarget,
             $pagerQuery,
-            $includeCredit
+            $includeCredit,
+            __('Ticket créé', 'stats')
         );
 
         $entityTableHtml = $buildTable(
@@ -695,7 +742,7 @@ if ($view === 'tickets') {
     $tooltipTotalCredit = __s('Addition de tous les credits consommes sur les tickets filtres. Si un technicien est choisi, on compte uniquement les credits qu il a saisis.');
     $tooltipByTech = __s('Repartition du temps de tache par technicien, basee sur les taches qu il a realisees sur les tickets filtres.');
     $tooltipByEntity = __s('Repartition du temps de tache par entite, basee sur les tickets filtres.');
-    $tooltipTableTech = __s('Pour chaque technicien : nombre de tickets ou il intervient, temps total de ses taches, et credits qu il a saisis (les credits saisis par d autres ne sont pas ajoutes).');
+    $tooltipTableTech = __s('Pour chaque technicien : nombre de tickets ou il intervient, nombre de tickets qu il a crees sur la plage, temps total de ses taches, et credits qu il a saisis (les credits saisis par d autres ne sont pas ajoutes).');
     $tooltipTableEntity = __s('Pour chaque entite : nombre de tickets, temps total des taches et credits consommes sur ces tickets. Si un technicien est filtre, seuls ses credits sont comptes.');
     echo "<div class='row g-3 mb-3'>";
     $totalColClass = $includeCredit ? 'col-md-6' : 'col-md-12';
