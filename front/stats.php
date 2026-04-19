@@ -5,7 +5,12 @@ include('../../../inc/includes.php');
 /** @var DBmysql $DB */
 global $CFG_GLPI, $DB;
 
-Session::checkRight(PluginStatsProfile::$rightname, PluginStatsProfile::RIGHT_READ);
+// Accès : au moins un droit parmi les 3 onglets
+if (!Session::haveRight(PluginStatsProfile::RIGHTNAME_CREDITS, PluginStatsProfile::RIGHT_READ)
+    && !Session::haveRight(PluginStatsProfile::RIGHTNAME_TICKETS, PluginStatsProfile::RIGHT_READ)
+    && !Session::haveRight(PluginStatsProfile::RIGHTNAME_SATISFACTION, PluginStatsProfile::RIGHT_READ)) {
+    Html::displayRightError();
+}
 
 $plugin = new Plugin();
 $creditPluginActive = $plugin->isInstalled('credit') && $plugin->isActivated('credit');
@@ -41,12 +46,27 @@ $satisfactionEnabled = $satisfactionPluginActive
     && $satisfactionQuestionsLoaded
     && $DB->tableExists('glpi_plugin_satisfactionclient_answers');
 
-$view = $_GET['view'] ?? ($creditEnabled ? 'credits' : 'tickets');
-if (!$creditEnabled && $view === 'credits') {
-    $view = 'tickets';
+// Droits par onglet
+$canViewCredits      = $creditEnabled      && Session::haveRight(PluginStatsProfile::RIGHTNAME_CREDITS,      PluginStatsProfile::RIGHT_READ);
+$canViewTickets      =                        Session::haveRight(PluginStatsProfile::RIGHTNAME_TICKETS,      PluginStatsProfile::RIGHT_READ);
+$canViewSatisfaction = $satisfactionEnabled && Session::haveRight(PluginStatsProfile::RIGHTNAME_SATISFACTION, PluginStatsProfile::RIGHT_READ);
+
+// Vue par défaut = premier onglet autorisé
+$defaultView = 'tickets';
+foreach (['credits' => $canViewCredits, 'tickets' => $canViewTickets, 'satisfaction' => $canViewSatisfaction] as $_v => $_ok) {
+    if ($_ok) { $defaultView = $_v; break; }
 }
-if (!$satisfactionEnabled && $view === 'satisfaction') {
-    $view = $creditEnabled ? 'credits' : 'tickets';
+
+$view = $_GET['view'] ?? $defaultView;
+
+// Validation : si la vue demandée n'est pas autorisée, revenir à la valeur par défaut
+$viewAccess = [
+    'credits'      => $canViewCredits,
+    'tickets'      => $canViewTickets,
+    'satisfaction' => $canViewSatisfaction,
+];
+if (empty($viewAccess[$view])) {
+    $view = $defaultView;
 }
 $runStats = isset($_GET['run']) ? (int) $_GET['run'] : 1;
 $dateBegin = $_GET['date_begin'] ?? '';
@@ -142,12 +162,14 @@ if (!$isAjaxRequest && !$isExportRequest) {
     echo "<div class='card mb-3'><div class='card-body'>";
     echo "<ul class='nav nav-tabs' role='tablist'>";
     $tabs = [];
-    if ($creditEnabled) {
+    if ($canViewCredits) {
         $tabs['credits'] = __('Stats credits', 'stats');
     }
-    $tabs['tickets'] = __('Stats tickets', 'stats');
-    if ($satisfactionEnabled) {
-        $tabs['satisfaction'] = __('Satisfaction', 'stats');
+    if ($canViewTickets) {
+        $tabs['tickets'] = __('Stats tickets', 'stats');
+    }
+    if ($canViewSatisfaction) {
+        $tabs['satisfaction'] = __('Stats satisfaction', 'stats');
     }
     foreach ($tabs as $tabKey => $label) {
         $active = $view === $tabKey ? 'active' : '';
@@ -1901,8 +1923,6 @@ JS;
     return;
 }
 
-/** @var DBmysql $DB */
-global $DB;
 $listLimit = (int) ($_REQUEST['glpilist_limit'] ?? ($_SESSION['glpilist_limit'] ?? 15));
 if ($listLimit <= 0) {
     $listLimit = 15;
