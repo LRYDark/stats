@@ -207,6 +207,10 @@ if ($view === 'tickets') {
     if ($DB->fieldExists($taskTable, 'is_deleted')) {
         $where["$taskTable.is_deleted"] = 0;
     }
+    // Ne pas compter les tickets en corbeille
+    if ($DB->fieldExists($ticketTable, 'is_deleted')) {
+        $where["$ticketTable.is_deleted"] = 0;
+    }
     if (!empty($selectedTechs)) {
         $where["$taskTable.users_id_tech"] = $selectedTechs;
     } else {
@@ -215,13 +219,18 @@ if ($view === 'tickets') {
     if (!empty($entityScope)) {
         $where["$ticketTable.entities_id"] = $entityScope;
     }
+    // La plage de dates porte sur la date reelle de la tache (date du travail),
+    // avec repli sur la date du ticket si la tache n a pas de date (jamais d exclusion silencieuse).
+    $taskDateExpr = $DB->fieldExists($taskTable, 'date')
+        ? 'COALESCE(' . $DB->quoteName("$taskTable.date") . ', ' . $DB->quoteName("$ticketTable.date") . ')'
+        : $DB->quoteName("$ticketTable.date");
     if ($dateStart !== '' || $dateStop !== '') {
         $dateCriteria = [];
         if ($dateStart !== '') {
-            $dateCriteria[] = ["$ticketTable.date" => ['>=', $dateStart]];
+            $dateCriteria[] = new QueryExpression($taskDateExpr . ' >= ' . $DB->quote($dateStart));
         }
         if ($dateStop !== '') {
-            $dateCriteria[] = ["$ticketTable.date" => ['<=', $dateStop]];
+            $dateCriteria[] = new QueryExpression($taskDateExpr . ' <= ' . $DB->quote($dateStop));
         }
         if (!empty($dateCriteria)) {
             if (!isset($where['AND']) || !is_array($where['AND'])) {
@@ -263,6 +272,29 @@ if ($view === 'tickets') {
     $isExport = in_array($exportType, ['tech', 'entity'], true);
     $includeCredit = $creditEnabled;
 
+    // Temps de trajet (plugin rt) : optionnel, uniquement si installe + active
+    $routeTable = 'glpi_plugin_rt_tickets';
+    $rtPluginActive = $plugin->isInstalled('rt') && $plugin->isActivated('rt');
+    $includeRoute = $rtPluginActive && $DB->tableExists($routeTable);
+
+    // Perimetre des taches pris en compte : celles ayant un temps d'action OU un temps de trajet.
+    // Un deplacement chez un client absent = trajet sans temps d'action, et doit etre comptabilise.
+    $aggJoins = $joins;
+    $aggWhere = $where;
+    if ($includeRoute) {
+        $aggJoins[$routeTable] = [
+            'ON' => [
+                $routeTable => 'tasks_id',
+                $taskTable  => 'id',
+            ],
+        ];
+        unset($aggWhere["$taskTable.actiontime"]);
+        $aggWhere[] = new QueryExpression(
+            '(' . $DB->quoteName("$taskTable.actiontime") . ' > 0 OR '
+            . $DB->quoteName("$routeTable.tasks_id") . ' IS NOT NULL)'
+        );
+    }
+
     if ($isAjax || $isExport) {
         $totalCredit = 0.0;
         $techCreditTotalsMap = [];
@@ -274,16 +306,15 @@ if ($view === 'tickets') {
             $fieldUsed = $config['field_used'] ?? 'consumed';
 
             $ticketIds = [];
-            $creditTaskWhere = $where;
-            if (!empty($selectedTechs)) {
-                $creditTaskWhere["$taskTable.users_id_tech"] = ['>', 0];
-            }
+            // Le credit porte sur les MEMES tickets que les taches filtrees (meme perimetre elargi
+            // tache OU trajet, pas de relaxation du filtre technicien) : carte, tableaux et modal se reconcilient.
+            $creditTaskWhere = $aggWhere;
             foreach ($DB->request([
                 'SELECT' => [
                     "$ticketTable.id AS ticket_id",
                 ],
                 'FROM' => $taskTable,
-                'LEFT JOIN' => $joins,
+                'LEFT JOIN' => $aggJoins,
                 'WHERE' => $creditTaskWhere,
                 'GROUPBY' => ["$ticketTable.id"],
             ]) as $row) {
@@ -298,9 +329,12 @@ if ($view === 'tickets') {
                     "$consumptionTable.$fieldTicket" => $ticketIds,
                 ];
                 $hasCreditUsers = $DB->fieldExists($consumptionTable, 'users_id');
-                if ($hasCreditUsers && !empty($selectedTechs)) {
-                    $creditWhere["$consumptionTable.users_id"] = $selectedTechs;
+                if ($hasCreditUsers) {
+                    // Toujours exclure le credit non attribue (users_id=0) pour que carte = somme des tableaux
+                    $creditWhere["$consumptionTable.users_id"] = !empty($selectedTechs) ? $selectedTechs : ['>', 0];
                 }
+                // Le credit suit le meme perimetre que les taches : tickets ayant une tache dans la periode
+                // (pas de second filtre sur la date de consommation, qui ferait disparaitre des credits reels).
                 $creditRow = $DB->request([
                     'SELECT' => [
                         new QueryExpression("COALESCE(SUM($consumptionTable.$fieldUsed), 0) AS total_credit"),
@@ -349,9 +383,7 @@ if ($view === 'tickets') {
                     'GROUPBY' => ["$ticketTable.entities_id"],
                 ]) as $row) {
                     $entityId = (int) ($row['entities_id'] ?? 0);
-                    if ($entityId > 0) {
-                        $entityCreditTotalsMap[$entityId] = (float) ($row['total_credit'] ?? 0);
-                    }
+                    $entityCreditTotalsMap[$entityId] = (float) ($row['total_credit'] ?? 0);
                 }
             }
         }
@@ -360,28 +392,41 @@ if ($view === 'tickets') {
         $techTicketsMap = [];
         $techCreatedTicketsMap = [];
         $entityTotalsMap = [];
+        // Maps trajet (secondes) : remplies dans la meme requete que le temps tache pour garantir la coherence
+        $techRouteMap = [];
+        $entityRouteMap = [];
+        $aggSelect = [
+            "$taskTable.users_id_tech AS tech_id",
+            "$ticketTable.entities_id AS entities_id",
+            new QueryExpression("SUM($taskTable.actiontime) AS total_time"),
+            new QueryExpression("COUNT(DISTINCT $taskTable.tickets_id) AS ticket_count"),
+        ];
+        if ($includeRoute) {
+            $aggSelect[] = new QueryExpression("COALESCE(SUM($routeTable.routetime), 0) AS total_route");
+        }
         foreach ($DB->request([
-            'SELECT' => [
-                "$taskTable.users_id_tech AS tech_id",
-                "$ticketTable.entities_id AS entities_id",
-                new QueryExpression("SUM($taskTable.actiontime) AS total_time"),
-                new QueryExpression("COUNT(DISTINCT $taskTable.tickets_id) AS ticket_count"),
-            ],
+            'SELECT' => $aggSelect,
             'FROM' => $taskTable,
-            'LEFT JOIN' => $joins,
-            'WHERE' => $where,
+            'LEFT JOIN' => $aggJoins,
+            'WHERE' => $aggWhere,
             'GROUPBY' => ["$taskTable.users_id_tech", "$ticketTable.entities_id"],
         ]) as $row) {
             $techId = (int) ($row['tech_id'] ?? 0);
             $entityId = (int) ($row['entities_id'] ?? 0);
             $seconds = (int) ($row['total_time'] ?? 0);
             $ticketCount = (int) ($row['ticket_count'] ?? 0);
+            $routeSeconds = $includeRoute ? ((int) ($row['total_route'] ?? 0) * 60) : 0;
             if ($techId > 0) {
                 $techTotalsMap[$techId] = ($techTotalsMap[$techId] ?? 0) + $seconds;
                 $techTicketsMap[$techId] = ($techTicketsMap[$techId] ?? 0) + $ticketCount;
+                if ($includeRoute) {
+                    $techRouteMap[$techId] = ($techRouteMap[$techId] ?? 0) + $routeSeconds;
+                }
             }
-            if ($entityId > 0) {
-                $entityTotalsMap[$entityId] = ($entityTotalsMap[$entityId] ?? 0) + $seconds;
+            // Inclut l'entite racine (id 0) pour rester coherent avec la carte globale
+            $entityTotalsMap[$entityId] = ($entityTotalsMap[$entityId] ?? 0) + $seconds;
+            if ($includeRoute) {
+                $entityRouteMap[$entityId] = ($entityRouteMap[$entityId] ?? 0) + $routeSeconds;
             }
         }
         $entityTicketsMap = [];
@@ -391,14 +436,12 @@ if ($view === 'tickets') {
                 new QueryExpression("COUNT(DISTINCT $taskTable.tickets_id) AS ticket_count"),
             ],
             'FROM' => $taskTable,
-            'LEFT JOIN' => $joins,
-            'WHERE' => $where,
+            'LEFT JOIN' => $aggJoins,
+            'WHERE' => $aggWhere,
             'GROUPBY' => ["$ticketTable.entities_id"],
         ]) as $row) {
             $entityId = (int) ($row['entities_id'] ?? 0);
-            if ($entityId > 0) {
-                $entityTicketsMap[$entityId] = (int) ($row['ticket_count'] ?? 0);
-            }
+            $entityTicketsMap[$entityId] = (int) ($row['ticket_count'] ?? 0);
         }
         if ($DB->fieldExists($ticketTable, 'users_id_recipient')) {
             $creatorTechIds = array_values(array_filter(array_map('intval', array_keys($techTotalsMap))));
@@ -406,6 +449,9 @@ if ($view === 'tickets') {
                 $createdWhere = [
                     "$ticketTable.users_id_recipient" => $creatorTechIds,
                 ];
+                if ($DB->fieldExists($ticketTable, 'is_deleted')) {
+                    $createdWhere["$ticketTable.is_deleted"] = 0;
+                }
                 if (!empty($entityScope)) {
                     $createdWhere["$ticketTable.entities_id"] = $entityScope;
                 }
@@ -437,6 +483,13 @@ if ($view === 'tickets') {
                 }
             }
         }
+        // Cas du credit saisi par un utilisateur SANS tache (saisisseur != executant, ex. dispatcher) :
+        // on lui cree une ligne (0 tache, 0 trajet) pour que la carte credit = somme colonne credit du tableau.
+        foreach (array_keys($techCreditTotalsMap) as $creditTechId) {
+            if ($creditTechId > 0 && !isset($techTotalsMap[$creditTechId])) {
+                $techTotalsMap[$creditTechId] = 0;
+            }
+        }
         arsort($techTotalsMap);
         arsort($entityTotalsMap);
 
@@ -447,6 +500,7 @@ if ($view === 'tickets') {
                 'seconds' => (int) $seconds,
                 'ticket_count' => (int) ($techTicketsMap[$techId] ?? 0),
                 'created_ticket_count' => (int) ($techCreatedTicketsMap[$techId] ?? 0),
+                'route_seconds' => (int) ($techRouteMap[$techId] ?? 0),
             ];
         }
         $entityTotals = [];
@@ -455,6 +509,7 @@ if ($view === 'tickets') {
                 'entities_id' => (int) $entityId,
                 'seconds' => (int) $seconds,
                 'ticket_count' => (int) ($entityTicketsMap[$entityId] ?? 0),
+                'route_seconds' => (int) ($entityRouteMap[$entityId] ?? 0),
             ];
         }
 
@@ -483,7 +538,7 @@ if ($view === 'tickets') {
             $entityId = (int) ($row['entities_id'] ?? 0);
             $label = $entityId > 0
                 ? $getEntityLabel($entityId)
-                : '';
+                : __('Entité racine', 'stats');
             $entityChartData[] = [
                 'name'  => $label,
                 'value' => round(((int) $row['seconds']) / HOUR_TIMESTAMP, 2),
@@ -505,6 +560,9 @@ if ($view === 'tickets') {
                     __('Ticket créé', 'stats'),
                     __('Temps tâche', 'stats'),
                 ];
+                if ($includeRoute) {
+                    $headers[] = __('Temps de trajet', 'stats');
+                }
                 if ($includeCredit) {
                     $headers[] = __('Temps credit', 'stats');
                 }
@@ -518,6 +576,10 @@ if ($view === 'tickets') {
                         (string) ((int) ($row['created_ticket_count'] ?? 0)),
                         $formatHours((int) ($row['seconds'] ?? 0)),
                     ];
+                    if ($includeRoute) {
+                        $routeSeconds = (int) ($row['route_seconds'] ?? 0);
+                        $csvRow[] = $routeSeconds > 0 ? $formatHours($routeSeconds) : '-';
+                    }
                     if ($includeCredit) {
                         $creditValue = (float) ($techCreditTotalsMap[$techId] ?? 0);
                         $creditLabel = $creditValue > 0 ? $formatCredit($creditValue) : '-';
@@ -531,6 +593,9 @@ if ($view === 'tickets') {
                     __('Tickets', 'stats'),
                     __('Temps', 'stats'),
                 ];
+                if ($includeRoute) {
+                    $headers[] = __('Temps de trajet', 'stats');
+                }
                 if ($includeCredit) {
                     $headers[] = __('Temps credit', 'stats');
                 }
@@ -539,12 +604,16 @@ if ($view === 'tickets') {
                     $entityId = (int) ($row['entities_id'] ?? 0);
                     $label = $entityId > 0
                         ? $getEntityLabel($entityId)
-                        : '';
+                        : __('Entité racine', 'stats');
                     $csvRow = [
                         $label,
                         (string) ((int) ($row['ticket_count'] ?? 0)),
                         $formatHours((int) ($row['seconds'] ?? 0)),
                     ];
+                    if ($includeRoute) {
+                        $routeSeconds = (int) ($row['route_seconds'] ?? 0);
+                        $csvRow[] = $routeSeconds > 0 ? $formatHours($routeSeconds) : '-';
+                    }
                     if ($includeCredit) {
                         $creditValue = (float) ($entityCreditTotalsMap[$entityId] ?? 0);
                         $creditLabel = $creditValue > 0 ? $formatCredit($creditValue) : '-';
@@ -572,6 +641,7 @@ if ($view === 'tickets') {
             string $pagerTarget,
             string $pagerQuery,
             bool $includeCredit,
+            bool $includeRoute,
             ?string $createdTicketsHeader = null
         ): string {
             ob_start();
@@ -587,12 +657,15 @@ if ($view === 'tickets') {
                 echo "<th class='text-end'>" . $createdTicketsHeader . "</th>";
             }
             echo "<th class='text-end'>" . __('Temps tâche', 'stats') . "</th>";
+            if ($includeRoute) {
+                echo "<th class='text-end'>" . __('Temps de trajet', 'stats') . "</th>";
+            }
             if ($includeCredit) {
                 echo "<th class='text-end'>" . __('Temps credit', 'stats') . "</th>";
             }
             echo "</tr></thead><tbody>";
             if (empty($rows)) {
-                $colspan = 3 + ($createdTicketsHeader !== null ? 1 : 0) + ($includeCredit ? 1 : 0);
+                $colspan = 3 + ($createdTicketsHeader !== null ? 1 : 0) + ($includeRoute ? 1 : 0) + ($includeCredit ? 1 : 0);
                 echo "<tr><td colspan='" . $colspan . "' class='text-center text-muted'>"
                     . __('Aucune donnee a afficher.', 'stats') . "</td></tr>";
             } else {
@@ -611,7 +684,7 @@ if ($view === 'tickets') {
             $techRows,
             __('Technicien', 'stats'),
             __('Tâches (ticket)', 'stats'),
-            function (array $row) use ($formatHours, $formatCredit, $techCreditTotalsMap, $buildModalUrl, $dateBegin, $dateEnd, $selectedEntities, $includeCredit, $getUserLabel) {
+            function (array $row) use ($formatHours, $formatCredit, $techCreditTotalsMap, $buildModalUrl, $dateBegin, $dateEnd, $selectedEntities, $includeCredit, $includeRoute, $getUserLabel) {
                 $techId = (int) ($row['tech_id'] ?? 0);
                 $name = $techId > 0 ? $getUserLabel($techId) : '';
                 $modalParams = [
@@ -625,16 +698,25 @@ if ($view === 'tickets') {
                 }
                 $modalUrl = $buildModalUrl($modalParams) . '&_in_modal=1';
                 $title = sprintf(__('Tâches (Tickets) du technicien %s', 'stats'), $name);
-                $link = $name !== ''
-                    ? "<a href='#' class='stats-ticket-modal' data-modal-url='"
-                        . htmlescape($modalUrl) . "' data-modal-title='" . htmlescape($title) . "'>"
-                        . htmlescape($name) . "</a>"
-                    : '';
+                // Pas de lien (modal vide) pour un saisisseur de credit sans tache
+                $hasTasks = ((int) ($row['seconds'] ?? 0) > 0) || ((int) ($row['ticket_count'] ?? 0) > 0);
+                $link = $name === ''
+                    ? ''
+                    : ($hasTasks
+                        ? "<a href='#' class='stats-ticket-modal' data-modal-url='"
+                            . htmlescape($modalUrl) . "' data-modal-title='" . htmlescape($title) . "'>"
+                            . htmlescape($name) . "</a>"
+                        : htmlescape($name));
                 echo "<tr>";
                 echo "<td>" . $link . "</td>";
                 echo "<td class='text-end'>" . htmlescape((string) ($row['ticket_count'] ?? 0)) . "</td>";
                 echo "<td class='text-end'>" . htmlescape((string) ($row['created_ticket_count'] ?? 0)) . "</td>";
                 echo "<td class='text-end'>" . $formatHours((int) $row['seconds']) . "</td>";
+                if ($includeRoute) {
+                    $routeSeconds = (int) ($row['route_seconds'] ?? 0);
+                    $routeLabel = $routeSeconds > 0 ? $formatHours($routeSeconds) : '-';
+                    echo "<td class='text-end'>" . htmlescape($routeLabel) . "</td>";
+                }
                 if ($includeCredit) {
                     $creditValue = (float) ($techCreditTotalsMap[$techId] ?? 0);
                     $creditLabel = $creditValue > 0 ? $formatCredit($creditValue) : '-';
@@ -647,6 +729,7 @@ if ($view === 'tickets') {
             $pagerTarget,
             $pagerQuery,
             $includeCredit,
+            $includeRoute,
             __('Ticket créé', 'stats')
         );
 
@@ -654,11 +737,11 @@ if ($view === 'tickets') {
             $entityRows,
             __('Entite', 'stats'),
             __('Tickets', 'stats'),
-            function (array $row) use ($formatHours, $formatCredit, $entityCreditTotalsMap, $buildModalUrl, $dateBegin, $dateEnd, $selectedTechs, $includeCredit, $getEntityLabel) {
+            function (array $row) use ($formatHours, $formatCredit, $entityCreditTotalsMap, $buildModalUrl, $dateBegin, $dateEnd, $selectedTechs, $includeCredit, $includeRoute, $getEntityLabel) {
                 $entityId = (int) ($row['entities_id'] ?? 0);
                 $label = $entityId > 0
                     ? $getEntityLabel($entityId)
-                    : '';
+                    : __('Entité racine', 'stats');
                 $modalParams = [
                     'type'       => 'entity',
                     'id'         => $entityId,
@@ -679,6 +762,11 @@ if ($view === 'tickets') {
                 echo "<td>" . $link . "</td>";
                 echo "<td class='text-end'>" . htmlescape((string) ($row['ticket_count'] ?? 0)) . "</td>";
                 echo "<td class='text-end'>" . $formatHours((int) $row['seconds']) . "</td>";
+                if ($includeRoute) {
+                    $routeSeconds = (int) ($row['route_seconds'] ?? 0);
+                    $routeLabel = $routeSeconds > 0 ? $formatHours($routeSeconds) : '-';
+                    echo "<td class='text-end'>" . htmlescape($routeLabel) . "</td>";
+                }
                 if ($includeCredit) {
                     $creditValue = (float) ($entityCreditTotalsMap[$entityId] ?? 0);
                     $creditLabel = $creditValue > 0 ? $formatCredit($creditValue) : '-';
@@ -690,7 +778,8 @@ if ($view === 'tickets') {
             $entityTotalCount,
             $pagerTarget,
             $pagerQuery,
-            $includeCredit
+            $includeCredit,
+            $includeRoute
         );
 
         $response = [
@@ -702,6 +791,9 @@ if ($view === 'tickets') {
             'tech_table' => $techTableHtml,
             'entity_table' => $entityTableHtml,
         ];
+        if ($includeRoute) {
+            $response['total_route'] = $formatHours((int) array_sum($techRouteMap));
+        }
         if ($includeCredit) {
             $response['total_credit'] = $formatCredit($totalCredit);
         }
@@ -762,18 +854,26 @@ if ($view === 'tickets') {
     $spinner = "<div class='text-center py-4'><div class='spinner-border text-secondary' role='status'></div></div>";
     $tooltipTotalTask = __s('Addition de tous les temps saisis sur les taches des tickets qui respectent les filtres Entites, Techniciens et Dates.');
     $tooltipTotalCredit = __s('Addition de tous les credits consommes sur les tickets filtres. Si un technicien est choisi, on compte uniquement les credits qu il a saisis.');
+    $tooltipTotalRoute = __s('Addition de tous les temps de trajet saisis sur les taches des tickets filtres (Entites, Techniciens, Dates), y compris les deplacements sans temps d action (client absent, etc.).');
     $tooltipByTech = __s('Repartition du temps de tache par technicien, basee sur les taches qu il a realisees sur les tickets filtres.');
     $tooltipByEntity = __s('Repartition du temps de tache par entite, basee sur les tickets filtres.');
     $tooltipTableTech = __s('Pour chaque technicien : nombre de tickets ou il intervient, nombre de tickets qu il a crees sur la plage, temps total de ses taches, et credits qu il a saisis (les credits saisis par d autres ne sont pas ajoutes).');
     $tooltipTableEntity = __s('Pour chaque entite : nombre de tickets, temps total des taches et credits consommes sur ces tickets. Si un technicien est filtre, seuls ses credits sont comptes.');
     echo "<div class='row g-3 mb-3'>";
-    $totalColClass = $includeCredit ? 'col-md-6' : 'col-md-12';
+    $totalCardsCount = 1 + ($includeRoute ? 1 : 0) + ($includeCredit ? 1 : 0);
+    $totalColClass = $totalCardsCount >= 3 ? 'col-md-4' : ($totalCardsCount === 2 ? 'col-md-6' : 'col-md-12');
     echo "<div class='" . $totalColClass . "'><div class='card h-100'><div class='card-body'>";
     echo "<div class='text-muted small'>" . __('Temps total tâche', 'stats') . $infoIcon($tooltipTotalTask) . "</div>";
     echo "<div class='fs-4 fw-semibold' id='stats_ticket_total_value'>" . $spinner . "</div>";
     echo "</div></div></div>";
+    if ($includeRoute) {
+        echo "<div class='" . $totalColClass . "'><div class='card h-100'><div class='card-body'>";
+        echo "<div class='text-muted small'>" . __('Temps total trajet', 'stats') . $infoIcon($tooltipTotalRoute) . "</div>";
+        echo "<div class='fs-4 fw-semibold' id='stats_ticket_total_route_value'>" . $spinner . "</div>";
+        echo "</div></div></div>";
+    }
     if ($includeCredit) {
-        echo "<div class='col-md-6'><div class='card h-100'><div class='card-body'>";
+        echo "<div class='" . $totalColClass . "'><div class='card h-100'><div class='card-body'>";
         echo "<div class='text-muted small'>" . __('Temps total credit', 'stats') . $infoIcon($tooltipTotalCredit) . "</div>";
         echo "<div class='fs-4 fw-semibold' id='stats_ticket_total_credit_value'>" . $spinner . "</div>";
         echo "</div></div></div>";
@@ -941,6 +1041,7 @@ if ($view === 'tickets') {
     var techContainer = document.getElementById('stats_ticket_table_tech');
     var entityContainer = document.getElementById('stats_ticket_table_entity');
     var totalValue = document.getElementById('stats_ticket_total_value');
+    var totalRouteValue = document.getElementById('stats_ticket_total_route_value');
     var totalCreditValue = document.getElementById('stats_ticket_total_credit_value');
 
       fetch(ajaxUrl, { credentials: 'same-origin' })
@@ -948,6 +1049,9 @@ if ($view === 'tickets') {
         .then(function(data) {
           if (totalValue) {
             totalValue.textContent = data.total || '0 h';
+          }
+          if (totalRouteValue) {
+            totalRouteValue.textContent = data.total_route || '0 h';
           }
           if (totalCreditValue) {
             totalCreditValue.textContent = data.total_credit || '0 h';
