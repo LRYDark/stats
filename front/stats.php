@@ -76,6 +76,33 @@ $dateStop = $dateEnd !== '' ? $dateEnd . ' 23:59:59' : '';
 $isAjaxRequest = isset($_GET['ajax']) && $_GET['ajax'] !== '';
 $isExportRequest = ($view === 'tickets' && isset($_GET['export']) && $_GET['export'] !== '')
     || ($view === 'satisfaction' && isset($_GET['export']) && $_GET['export'] !== '');
+
+// Filtres favoris : la fonctionnalite n'est active que si la table existe (plugin migre).
+$favoritesEnabled = $DB->tableExists('glpi_plugin_stats_filters');
+
+// Rechargement automatique du favori "par defaut" sur une arrivee "nue" (seul `view` dans l'URL,
+// donc aucune soumission de formulaire). Une fois redirige avec des params, l'URL n'est plus nue : pas de boucle.
+if ($favoritesEnabled && !$isAjaxRequest && !$isExportRequest
+    && count(array_diff(array_keys($_GET), ['view'])) === 0) {
+    $defaultFilter = PluginStatsFilter::getDefaultForUser((int) Session::getLoginUserID(), $view);
+    if ($defaultFilter !== null && trim((string) $defaultFilter['params']) !== '') {
+        $defaultParams = [];
+        parse_str((string) $defaultFilter['params'], $defaultParams);
+        unset($defaultParams['ajax'], $defaultParams['export'], $defaultParams['start']);
+        $defaultParams['view'] = $view;
+        $hasRealFilter = false;
+        foreach ($defaultParams as $paramKey => $paramValue) {
+            if ($paramKey !== 'view' && $paramValue !== '' && $paramValue !== []) {
+                $hasRealFilter = true;
+                break;
+            }
+        }
+        if ($hasRealFilter) {
+            Html::redirect($CFG_GLPI['root_doc'] . '/plugins/stats/front/stats.php?' . http_build_query($defaultParams));
+        }
+    }
+}
+
 $infoIcon = static function (string $text): string {
     if ($text === '') {
         return '';
@@ -113,6 +140,30 @@ $expandEntityScope = static function (array $entityIds): array {
     }
     return array_keys($scope);
 };
+$expandCategoryScope = static function (array $categoryIds): array {
+    static $sonsCache = [];
+
+    $scope = [];
+    foreach ($categoryIds as $categoryId) {
+        $categoryId = (int) $categoryId;
+        if ($categoryId <= 0) {
+            continue;
+        }
+        if (!array_key_exists($categoryId, $sonsCache)) {
+            $sons = getSonsOf('glpi_itilcategories', $categoryId);
+            if (!is_array($sons)) {
+                $sons = [$categoryId];
+            }
+            $sonsCache[$categoryId] = array_values(array_filter(array_map('intval', $sons)));
+        }
+        foreach ($sonsCache[$categoryId] as $sonId) {
+            if ($sonId > 0) {
+                $scope[$sonId] = true;
+            }
+        }
+    }
+    return array_keys($scope);
+};
 $getEntityLabel = static function (int $entityId): string {
     static $cache = [];
     if ($entityId <= 0) {
@@ -136,6 +187,58 @@ $getUserLabel = static function (int $userId): string {
     return (string) $cache[$userId];
 };
 
+// Carte de filtres repliable (commune aux 3 vues) : barre masquee par defaut, bouton pour l'afficher.
+$openFilterCard = static function (): void {
+    echo "<div class='card mb-3 stats-filter-card'>";
+    echo "<div class='card-header d-flex justify-content-between align-items-center py-2' role='button' tabindex='0'>";
+    echo "<span class='fw-semibold'><i class='ti ti-filter me-1'></i>" . __('Filtres', 'stats') . "</span>";
+    echo "<button type='button' class='btn btn-sm btn-outline-secondary' data-stats-toggle aria-expanded='false'>";
+    echo "<i class='ti ti-chevron-down me-1'></i><span class='stats-toggle-label'>" . __('Afficher', 'stats') . "</span>";
+    echo "</button>";
+    echo "</div>";
+    echo "<div class='card-body stats-filters-body collapsed'>";
+};
+$closeFilterCard = static function (): void {
+    echo "</div></div>";
+};
+
+// Barre des filtres favoris (select + actions), inseree dans chaque formulaire de filtre.
+$renderFavoritesBar = static function (string $view) use ($favoritesEnabled): void {
+    if (!$favoritesEnabled) {
+        return;
+    }
+    echo "<div class='col-12'>";
+    echo "<div class='stats-favorites-bar d-flex flex-wrap align-items-center gap-2 p-2 rounded'"
+        . " data-stats-favorites data-view='" . htmlescape($view) . "'>";
+
+    // Groupe gauche : charger / supprimer un favori existant.
+    echo "<span class='fw-semibold text-nowrap'><i class='ti ti-star me-1'></i>"
+        . __('Mes filtres', 'stats') . "</span>";
+    echo "<div class='input-group input-group-sm w-auto'>";
+    echo "<select class='form-select' data-fav-select aria-label='" . htmlescape(__('Mes filtres', 'stats')) . "'></select>";
+    echo "<button type='button' class='btn btn-outline-secondary' data-fav-apply>"
+        . "<i class='ti ti-check me-1'></i>" . __('Appliquer', 'stats') . "</button>";
+    echo "<button type='button' class='btn btn-outline-danger' data-fav-delete"
+        . " title='" . htmlescape(__('Supprimer le favori selectionne', 'stats')) . "'>"
+        . "<i class='ti ti-trash'></i></button>";
+    echo "</div>";
+
+    // Espace souple : pousse le groupe de droite a l'oppose.
+    echo "<span class='flex-grow-1'></span>";
+
+    // Groupe droite : enregistrer le filtre courant.
+    echo "<div class='form-check mb-0'>";
+    echo "<input type='checkbox' class='form-check-input' data-fav-default id='stats_fav_default_" . htmlescape($view) . "'>";
+    echo "<label class='form-check-label small' for='stats_fav_default_" . htmlescape($view) . "'>"
+        . __('Par defaut', 'stats') . "</label>";
+    echo "</div>";
+    echo "<button type='button' class='btn btn-sm btn-primary text-nowrap' data-fav-save>"
+        . "<i class='ti ti-device-floppy me-1'></i>" . __('Enregistrer le filtre actuel', 'stats') . "</button>";
+
+    echo "</div>";
+    echo "</div>";
+};
+
 if (!$isAjaxRequest && !$isExportRequest) {
     echo "<style>
 .stats-filters .select2-container--default .select2-selection--multiple {
@@ -156,6 +259,29 @@ if (!$isAjaxRequest && !$isExportRequest) {
 }
 .stats-filters .select2-selection__rendered {
   min-height: 30px;
+}
+.stats-filter-card .card-header {
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 0;
+}
+.stats-filters .form-label {
+  border: 0 !important;
+  box-shadow: none !important;
+  text-decoration: none !important;
+}
+.stats-filters-body.collapsed {
+  display: none;
+}
+.stats-filters hr {
+  display: none !important;
+}
+.stats-favorites-bar {
+  background: var(--tblr-bg-surface-secondary, #f6f8fb);
+  border: 1px solid var(--tblr-border-color, #e6e7e9);
+}
+.stats-favorites-bar [data-fav-select] {
+  min-width: 12rem;
 }
 </style>";
     Html::header(__('Stats', 'stats'), $_SERVER['PHP_SELF'], 'tools', 'stats');
@@ -180,6 +306,178 @@ if (!$isAjaxRequest && !$isExportRequest) {
     }
     echo "</ul>";
     echo "</div></div>";
+
+    // JS commun du bouton replier/deplier des barres de filtre (les 3 vues). Barre fermee par defaut.
+    $toggleShowLabel = json_encode(__('Afficher', 'stats'), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+    $toggleHideLabel = json_encode(__('Masquer', 'stats'), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+    $toggleJs = <<<JS
+(function() {
+  var showLabel = {$toggleShowLabel};
+  var hideLabel = {$toggleHideLabel};
+  var init = function() {
+    var cards = document.querySelectorAll('.stats-filter-card');
+    Array.prototype.forEach.call(cards, function(card) {
+      var header = card.querySelector('.card-header');
+      var body = card.querySelector('.stats-filters-body');
+      var btn = card.querySelector('[data-stats-toggle]');
+      if (!header || !body) { return; }
+      var refresh = function() {
+        var collapsed = body.classList.contains('collapsed');
+        if (btn) {
+          btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+          var icon = btn.querySelector('i');
+          var label = btn.querySelector('.stats-toggle-label');
+          if (icon) { icon.className = collapsed ? 'ti ti-chevron-down me-1' : 'ti ti-chevron-up me-1'; }
+          if (label) { label.textContent = collapsed ? showLabel : hideLabel; }
+        }
+      };
+      var toggle = function() { body.classList.toggle('collapsed'); refresh(); };
+      header.addEventListener('click', toggle);
+      header.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); }
+      });
+      refresh();
+    });
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+JS;
+    echo Html::scriptBlock($toggleJs);
+
+    // JS commun de gestion des filtres favoris (liste / appliquer / enregistrer / supprimer).
+    if ($favoritesEnabled) {
+        $favJsConfig = json_encode([
+            'ajaxUrl' => $CFG_GLPI['root_doc'] . '/plugins/stats/ajax/filters.php',
+            'baseUrl' => $CFG_GLPI['root_doc'] . '/plugins/stats/front/stats.php',
+            'view'    => $view,
+            'csrf'    => Session::getNewCSRFToken(),
+            'i18n'    => [
+                'placeholder'   => __('— Mes filtres —', 'stats'),
+                'defaultSuffix' => __('(par defaut)', 'stats'),
+                'promptName'    => __('Nom du filtre favori :', 'stats'),
+                'confirmDelete' => __('Supprimer ce filtre favori ?', 'stats'),
+                'error'         => __('Erreur lors de l\'enregistrement du filtre.', 'stats'),
+            ],
+        ], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
+        $favJs = <<<JS
+(function() {
+  var cfg = {$favJsConfig};
+  var bar = null, sel = null, paramsById = {};
+
+  var populate = function(filters) {
+    paramsById = {};
+    sel.innerHTML = '';
+    var ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = cfg.i18n.placeholder;
+    sel.appendChild(ph);
+    (filters || []).forEach(function(f) {
+      paramsById[f.id] = f.params || '';
+      var o = document.createElement('option');
+      o.value = String(f.id);
+      o.textContent = f.is_default ? (f.name + ' ' + cfg.i18n.defaultSuffix) : f.name;
+      sel.appendChild(o);
+    });
+  };
+
+  var loadList = function() {
+    fetch(cfg.ajaxUrl + '?action=list&view=' + encodeURIComponent(cfg.view), {
+      credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { if (d.success) { populate(d.filters); } })
+      .catch(function() {});
+  };
+
+  var currentParams = function() {
+    var form = bar.closest('form');
+    if (!form) { return ''; }
+    return new URLSearchParams(new FormData(form)).toString();
+  };
+
+  var post = function(body, onOk) {
+    fetch(cfg.ajaxUrl, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-Glpi-Csrf-Token': cfg.csrf
+      },
+      body: body.toString()
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { onOk(d); })
+      .catch(function() { window.alert(cfg.i18n.error); });
+  };
+
+  var apply = function() {
+    var id = sel.value;
+    if (!id || !(id in paramsById) || !paramsById[id]) { return; }
+    window.location = cfg.baseUrl + '?' + paramsById[id];
+  };
+
+  var save = function() {
+    var selectedName = '';
+    if (sel.value && sel.selectedOptions.length) {
+      selectedName = sel.selectedOptions[0].textContent.replace(' ' + cfg.i18n.defaultSuffix, '');
+    }
+    var name = window.prompt(cfg.i18n.promptName, selectedName);
+    if (name === null) { return; }
+    name = name.trim();
+    if (name === '') { return; }
+    var def = bar.querySelector('[data-fav-default]');
+    var body = new URLSearchParams();
+    body.set('action', 'save');
+    body.set('view', cfg.view);
+    body.set('name', name);
+    body.set('params', currentParams());
+    body.set('is_default', (def && def.checked) ? '1' : '0');
+    body.set('_glpi_csrf_token', cfg.csrf);
+    post(body, function(d) { if (d.success) { populate(d.filters); } else { window.alert(cfg.i18n.error); } });
+  };
+
+  var del = function() {
+    var id = sel.value;
+    if (!id) { return; }
+    if (!window.confirm(cfg.i18n.confirmDelete)) { return; }
+    var body = new URLSearchParams();
+    body.set('action', 'delete');
+    body.set('view', cfg.view);
+    body.set('id', id);
+    body.set('_glpi_csrf_token', cfg.csrf);
+    post(body, function(d) { if (d.success) { populate(d.filters); } });
+  };
+
+  var init = function() {
+    bar = document.querySelector('[data-stats-favorites]');
+    if (!bar) { return; }
+    sel = bar.querySelector('[data-fav-select]');
+    var ba = bar.querySelector('[data-fav-apply]');
+    var bd = bar.querySelector('[data-fav-delete]');
+    var bs = bar.querySelector('[data-fav-save]');
+    if (!sel) { return; }
+    if (ba) { ba.addEventListener('click', apply); }
+    if (bd) { bd.addEventListener('click', del); }
+    if (bs) { bs.addEventListener('click', save); }
+    sel.addEventListener('dblclick', apply);
+    loadList();
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+JS;
+        echo Html::scriptBlock($favJs);
+    }
 }
 
 if ($view === 'tickets') {
@@ -198,6 +496,10 @@ if ($view === 'tickets') {
     $selectedEntities = $normalizeIntList($_GET['ticket_entities_id'] ?? []);
     $selectedTechs = $normalizeIntList($_GET['technicians_id'] ?? []);
     $entityScope = $expandEntityScope($selectedEntities);
+    $selectedCategories = $normalizeIntList($_GET['itilcategories_id'] ?? []);
+    $categoryScope = $expandCategoryScope($selectedCategories);
+    $keywords = trim((string) ($_GET['keywords'] ?? ''));
+    $filterOperator = (strtoupper((string) ($_GET['filter_operator'] ?? 'AND')) === 'OR') ? 'OR' : 'AND';
 
     $taskTable = 'glpi_tickettasks';
     $ticketTable = 'glpi_tickets';
@@ -238,6 +540,43 @@ if ($view === 'tickets') {
             }
             $where['AND'] = array_merge($where['AND'], $dateCriteria);
         }
+    }
+
+    // Filtres Categorie + Mots-cles (chaque filtre optionnel, combinables par operateur ET/OU).
+    // itilcategories_id, name et content sont des colonnes directes de glpi_tickets : aucun JOIN.
+    $catKwConditions = [];
+    $catCond = null;
+    if (!empty($categoryScope) && $DB->fieldExists($ticketTable, 'itilcategories_id')) {
+        $catCond = ["$ticketTable.itilcategories_id" => $categoryScope];
+    }
+    $kwCond = null;
+    if ($keywords !== '' && $DB->fieldExists($ticketTable, 'name') && $DB->fieldExists($ticketTable, 'content')) {
+        $words = preg_split('/\s+/', $keywords, -1, PREG_SPLIT_NO_EMPTY);
+        $kwOr = [];
+        foreach ($words as $word) {
+            $like = '%' . $word . '%';
+            // Recherche par mot dans le titre OU le contenu ; les mots sont combines en OU (au moins un).
+            $kwOr[] = ["$ticketTable.name" => ['LIKE', $like]];
+            $kwOr[] = ["$ticketTable.content" => ['LIKE', $like]];
+        }
+        if (!empty($kwOr)) {
+            $kwCond = ['OR' => $kwOr];
+        }
+    }
+    if ($catCond !== null && $kwCond !== null) {
+        if ($filterOperator === 'OR') {
+            $catKwConditions[] = ['OR' => [$catCond, $kwCond]];
+        } else {
+            $catKwConditions[] = $catCond;
+            $catKwConditions[] = $kwCond;
+        }
+    } elseif ($catCond !== null) {
+        $catKwConditions[] = $catCond;
+    } elseif ($kwCond !== null) {
+        $catKwConditions[] = $kwCond;
+    }
+    foreach ($catKwConditions as $condition) {
+        $where[] = $condition;
     }
 
     $joins = [
@@ -466,6 +805,10 @@ if ($view === 'tickets') {
                     if (!empty($createdDateCriteria)) {
                         $createdWhere['AND'] = $createdDateCriteria;
                     }
+                }
+                // Coherence : la colonne "Ticket cree" respecte aussi les filtres categorie / mots-cles.
+                foreach ($catKwConditions as $condition) {
+                    $createdWhere[] = $condition;
                 }
                 foreach ($DB->request([
                     'SELECT' => [
@@ -808,7 +1151,7 @@ if ($view === 'tickets') {
         exit;
     }
 
-    echo "<div class='card mb-3'><div class='card-body'>";
+    $openFilterCard();
     echo "<form method='get' action='" . $CFG_GLPI['root_doc'] . "/plugins/stats/front/stats.php' class='row g-3 align-items-end stats-filters'>";
     echo Html::hidden('view', ['value' => 'tickets']);
     echo "<div class='col-md-6'>";
@@ -829,6 +1172,31 @@ if ($view === 'tickets') {
         'right'    => 'all',
     ]);
     echo "</div>";
+    echo "<div class='col-md-4'>";
+    echo "<label class='form-label mb-1'>" . __('Categorie', 'stats') . "</label>";
+    Dropdown::show('ITILCategory', [
+        'name'     => 'itilcategories_id[]',
+        'value'    => $selectedCategories,
+        'multiple' => true,
+        'width'    => '100%',
+    ]);
+    echo "</div>";
+    echo "<div class='col-md-4'>";
+    echo "<label class='form-label mb-1'>" . __('Operateur Categorie / Mots-cles', 'stats') . "</label>";
+    Dropdown::showFromArray('filter_operator', [
+        'AND' => __('ET (categorie ET mots-cles)', 'stats'),
+        'OR'  => __('OU (categorie OU mots-cles)', 'stats'),
+    ], [
+        'value' => $filterOperator,
+        'width' => '100%',
+    ]);
+    echo "</div>";
+    echo "<div class='col-md-4'>";
+    echo "<label class='form-label mb-1'>" . __('Mots-cles', 'stats') . "</label>";
+    echo "<input type='text' class='form-control' name='keywords' value='"
+        . Html::cleanInputText($keywords) . "' placeholder='"
+        . htmlescape(__('Mots-cles (separes par des espaces)', 'stats')) . "'>";
+    echo "</div>";
     echo "<div class='col-md-3'>";
     echo "<label class='form-label mb-1'>" . __('Date de debut', 'stats') . "</label>";
     Html::showDateField('date_begin', [
@@ -845,11 +1213,12 @@ if ($view === 'tickets') {
         'display'     => true,
     ]);
     echo "</div>";
+    $renderFavoritesBar($view);
     echo "<div class='col-12 text-end'>";
     echo Html::submit(__('Filtrer', 'stats'), ['class' => 'btn btn-primary']);
     echo "</div>";
     echo "</form>";
-    echo "</div></div>";
+    $closeFilterCard();
 
     $spinner = "<div class='text-center py-4'><div class='spinner-border text-secondary' role='status'></div></div>";
     $tooltipTotalTask = __s('Addition de tous les temps saisis sur les taches des tickets qui respectent les filtres Entites, Techniciens et Dates.');
@@ -1486,7 +1855,7 @@ if ($view === 'satisfaction') {
         return ob_get_clean();
     };
 
-    echo "<div class='card mb-3'><div class='card-body'>";
+    $openFilterCard();
     echo "<form method='get' action='" . $CFG_GLPI['root_doc'] . "/plugins/stats/front/stats.php' class='row g-3 align-items-end stats-filters'>";
     echo Html::hidden('view', ['value' => 'satisfaction']);
     echo "<div class='col-md-4'>";
@@ -1533,11 +1902,12 @@ if ($view === 'satisfaction') {
         'display'     => true,
     ]);
     echo "</div>";
+    $renderFavoritesBar($view);
     echo "<div class='col-12 text-end'>";
     echo Html::submit(__('Filtrer', 'stats'), ['class' => 'btn btn-primary']);
     echo "</div>";
     echo "</form>";
-    echo "</div></div>";
+    $closeFilterCard();
 
     echo "<div class='text-muted small mb-2'>"
         . __('Question analysee', 'stats') . " : " . htmlescape($questionLabel)
@@ -2269,7 +2639,7 @@ $chartStatusCounts = $statsEntityId > 0
     : $statusCounts;
 $chartProvTotals = $statsEntityId > 0 ? $provEntityTotals : $provTotals;
 
-echo "<div class='card mb-3'><div class='card-body'>";
+$openFilterCard();
 echo "<form method='get' action='" . $CFG_GLPI['root_doc'] . "/plugins/stats/front/stats.php' class='row g-3 align-items-end stats-filters'>";
 echo Html::hidden('view', ['value' => 'credits']);
 echo Html::hidden('run', ['value' => 1]);
@@ -2297,11 +2667,12 @@ Html::showDateField('date_end', [
     'display'     => true,
 ]);
 echo "</div>";
+$renderFavoritesBar($view);
 echo "<div class='col-12 text-end'>";
 echo Html::submit(__('Filtrer', 'stats'), ['class' => 'btn btn-primary']);
 echo "</div>";
 echo "</form>";
-echo "</div></div>";
+$closeFilterCard();
 
 if (!$shouldRunCredits) {
     echo "<div class='alert alert-info'>";
