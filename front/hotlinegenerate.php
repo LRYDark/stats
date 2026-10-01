@@ -42,6 +42,11 @@ if (empty($job['announced'])) {
             unset($_SESSION['MESSAGE_AFTER_REDIRECT'][INFO][$i]);
         }
     }
+    // GLPI affiche un toast par type de message, même sans message : une liste
+    // vidée afficherait un toast « Information » vide.
+    if (empty($_SESSION['MESSAGE_AFTER_REDIRECT'][INFO])) {
+        unset($_SESSION['MESSAGE_AFTER_REDIRECT'][INFO]);
+    }
     $_SESSION[PluginStatsHotlineticket::SESSION_JOBS][$key]['announced'] = true;
 }
 

@@ -325,7 +325,11 @@ class PluginStatsHotline
         echo "</div>";
 
         echo "<div class='card-body'>";
-        echo "<div class='progress progress-lg mb-2'><div class='progress-bar' style='width:0%' data-job-bar></div></div>";
+        // Barre assez haute pour y lire le pourcentage ; bleue (blanc lisible,
+        // contrairement au jaune du thème) pendant la génération, verte à la fin.
+        echo "<div class='progress mb-2' style='height:1.25rem'>"
+            . "<div class='progress-bar bg-blue progress-bar-striped progress-bar-animated fw-bold' style='width:0%;font-size:.8rem' data-job-bar></div>"
+            . "</div>";
         echo "<div class='d-flex flex-wrap gap-3 small' data-job-counters>";
         echo "<span><span class='badge bg-green-lt' data-count='done'>0</span> " . __s('générés', 'stats') . "</span>";
         echo "<span><span class='badge bg-azure-lt' data-count='exists'>0</span> " . __s('déjà présents', 'stats') . "</span>";
@@ -627,6 +631,11 @@ JS;
       var pct = total > 0 ? Math.round(((total - counts.todo) / total) * 100) : 100;
       bar.style.width = pct + '%';
       bar.textContent = pct + ' %';
+      var finished = pct >= 100;
+      bar.classList.toggle('bg-green', finished);
+      bar.classList.toggle('bg-blue', !finished);
+      bar.classList.toggle('progress-bar-striped', !finished);
+      bar.classList.toggle('progress-bar-animated', !finished);
     }
   };
 
