@@ -29,7 +29,7 @@ class PluginStatsFilter extends CommonDBTM
      */
     public static function getAllowedViews(): array
     {
-        return ['tickets', 'satisfaction', 'credits'];
+        return ['tickets', 'satisfaction', 'credits', 'rp', 'gestion'];
     }
 
     public static function normalizeView($view): string

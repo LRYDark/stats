@@ -41,6 +41,20 @@ class PluginStatsInstall
             PluginStatsProfile::install($migration);
         }
 
+        /*
+         * Vue de la liste « Rapports hotline à générer », si RP et Credit sont
+         * là. Sinon elle sera créée à la première ouverture de l'onglet
+         * (PluginStatsHotlineticket::ensureView) : un échec ici ne doit pas
+         * bloquer l'installation du reste du plugin.
+         */
+        if (class_exists(PluginStatsHotlineticket::class)) {
+            try {
+                PluginStatsHotlineticket::ensureView();
+            } catch (\Throwable $e) {
+                Toolbox::logInFile('plugin-stats', 'Installation, vue hotline : ' . $e->getMessage() . "\n");
+            }
+        }
+
         $migration->executeMigration();
 
         return true;
@@ -64,6 +78,10 @@ class PluginStatsInstall
 
         if (class_exists(PluginStatsProfile::class)) {
             PluginStatsProfile::removeRights();
+        }
+
+        if (class_exists(PluginStatsHotlineticket::class)) {
+            PluginStatsHotlineticket::dropView();
         }
 
         $migration->executeMigration();

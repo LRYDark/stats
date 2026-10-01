@@ -18,10 +18,11 @@ header('Content-Type: application/json; charset=utf-8');
 
 Session::checkLoginUser();
 
-// Acces : au moins un des 3 droits stats (meme controle que front/stats.php).
-if (!Session::haveRight(PluginStatsProfile::RIGHTNAME_CREDITS, PluginStatsProfile::RIGHT_READ)
-    && !Session::haveRight(PluginStatsProfile::RIGHTNAME_TICKETS, PluginStatsProfile::RIGHT_READ)
-    && !Session::haveRight(PluginStatsProfile::RIGHTNAME_SATISFACTION, PluginStatsProfile::RIGHT_READ)) {
+// Acces : au moins un onglet autorise (meme controle que front/stats.php).
+// Enumerer les droits ici les figeait a trois : un profil n'ayant que le droit
+// d'un onglet ajoute ensuite recevait 403, et ses filtres favoris cessaient de
+// fonctionner sans le moindre message.
+if (!PluginStatsMenu::canView()) {
     http_response_code(403);
     echo json_encode(['success' => false, 'message' => 'forbidden']);
     exit;

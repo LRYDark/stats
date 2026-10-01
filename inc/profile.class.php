@@ -9,6 +9,9 @@ class PluginStatsProfile extends Profile
     public const RIGHTNAME_CREDITS     = 'plugin_stats_credits';
     public const RIGHTNAME_TICKETS     = 'plugin_stats_tickets';
     public const RIGHTNAME_SATISFACTION = 'plugin_stats_satisfaction';
+    public const RIGHTNAME_RP          = 'plugin_stats_rp';
+    public const RIGHTNAME_GESTION     = 'plugin_stats_gestion';
+    public const RIGHTNAME_HOTLINE     = 'plugin_stats_hotline';
 
     public const RIGHT_READ = 1;
 
@@ -25,7 +28,13 @@ class PluginStatsProfile extends Profile
         return 'fa-solid fa-line-chart';
     }
 
-    /** Retourne les 3 définitions de droits */
+    /**
+     * Définition des droits, un par onglet.
+     *
+     * SOURCE UNIQUE : la matrice du profil, l'installation, la désinstallation et
+     * le rechargement en session la parcourent tous. Ajouter un onglet se fait
+     * donc ici, et nulle part ailleurs.
+     */
     public static function getAllRights($all = false): array
     {
         return [
@@ -47,7 +56,31 @@ class PluginStatsProfile extends Profile
                 'field'    => self::RIGHTNAME_SATISFACTION,
                 'rights'   => [self::RIGHT_READ => __('Voir Satisfaction', 'stats')],
             ],
+            [
+                'itemtype' => self::class,
+                'label'    => __('Stats rapports (RP)', 'stats'),
+                'field'    => self::RIGHTNAME_RP,
+                'rights'   => [self::RIGHT_READ => __('Voir les statistiques de signature des rapports', 'stats')],
+            ],
+            [
+                'itemtype' => self::class,
+                'label'    => __('Stats bons de livraison (Gestion)', 'stats'),
+                'field'    => self::RIGHTNAME_GESTION,
+                'rights'   => [self::RIGHT_READ => __('Voir les statistiques de signature des bons de livraison', 'stats')],
+            ],
+            [
+                'itemtype' => self::class,
+                'label'    => __('Rapports hotline à générer (RP + Credit)', 'stats'),
+                'field'    => self::RIGHTNAME_HOTLINE,
+                'rights'   => [self::RIGHT_READ => __('Voir les tickets facturés en crédit sans rapport hotline', 'stats')],
+            ],
         ];
+    }
+
+    /** Noms des droits, dans l'ordre de getAllRights(). */
+    public static function getRightNames(): array
+    {
+        return array_column(self::getAllRights(), 'field');
     }
 
     /**
@@ -63,11 +96,10 @@ class PluginStatsProfile extends Profile
             return;
         }
 
-        $newRights = [
-            self::RIGHTNAME_CREDITS,
-            self::RIGHTNAME_TICKETS,
-            self::RIGHTNAME_SATISFACTION,
-        ];
+        // Dérivés de getAllRights() : une liste recopiée ici aurait été oubliée
+        // au premier onglet ajouté, et le droit correspondant n'aurait jamais
+        // existé en base — onglet invisible pour tout le monde, sans erreur.
+        $newRights = self::getRightNames();
 
         // Profils qui avaient l'ancien droit (valeur > 0)
         $legacyProfileIds = [];
@@ -111,12 +143,8 @@ class PluginStatsProfile extends Profile
         }
 
         $DB->delete('glpi_profilerights', [
-            'name' => [
-                self::RIGHTNAME_CREDITS,
-                self::RIGHTNAME_TICKETS,
-                self::RIGHTNAME_SATISFACTION,
-                self::RIGHTNAME_LEGACY,
-            ],
+            // Même source que l'installation, plus l'ancien droit unique.
+            'name' => array_merge(self::getRightNames(), [self::RIGHTNAME_LEGACY]),
         ]);
     }
 
@@ -203,11 +231,13 @@ class PluginStatsProfile extends Profile
 
     public static function createFirstAccess($profiles_id): void
     {
-        self::addDefaultProfileInfos($profiles_id, [
-            self::RIGHTNAME_CREDITS      => self::RIGHT_READ,
-            self::RIGHTNAME_TICKETS      => self::RIGHT_READ,
-            self::RIGHTNAME_SATISFACTION => self::RIGHT_READ,
-        ], true);
+        // Tous les onglets ouverts au profil installateur, y compris ceux ajoutés
+        // par la suite : la liste vient de getAllRights().
+        $rights = [];
+        foreach (self::getRightNames() as $name) {
+            $rights[$name] = self::RIGHT_READ;
+        }
+        self::addDefaultProfileInfos($profiles_id, $rights, true);
     }
 
     public static function initProfile(): void

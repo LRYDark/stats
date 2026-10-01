@@ -5,69 +5,47 @@ include('../../../inc/includes.php');
 /** @var DBmysql $DB */
 global $CFG_GLPI, $DB;
 
-// Accès : au moins un droit parmi les 3 onglets
-if (!Session::haveRight(PluginStatsProfile::RIGHTNAME_CREDITS, PluginStatsProfile::RIGHT_READ)
-    && !Session::haveRight(PluginStatsProfile::RIGHTNAME_TICKETS, PluginStatsProfile::RIGHT_READ)
-    && !Session::haveRight(PluginStatsProfile::RIGHTNAME_SATISFACTION, PluginStatsProfile::RIGHT_READ)) {
+// Accès : au moins un onglet autorisé (même règle que le menu et les favoris)
+if (!PluginStatsMenu::canView()) {
     Html::displayRightError();
 }
 
+// Gardé pour la vue tickets (plugin rt, temps de trajet).
 $plugin = new Plugin();
-$creditPluginActive = $plugin->isInstalled('credit') && $plugin->isActivated('credit');
-$creditAlertActive = $plugin->isInstalled('creditalert') && $plugin->isActivated('creditalert');
-$creditConfigLoaded = false;
-if ($creditAlertActive) {
-    if (!class_exists('PluginCreditalertConfig')) {
-        $creditalertConfig = GLPI_ROOT . '/plugins/creditalert/inc/config.class.php';
-        if (file_exists($creditalertConfig)) {
-            include_once $creditalertConfig;
-        }
-    }
-    $creditConfigLoaded = class_exists('PluginCreditalertConfig');
-}
 
-$creditEnabled = $creditPluginActive && $creditAlertActive && $creditConfigLoaded;
-if ($creditEnabled) {
-    PluginCreditalertConfig::ensureViews();
-}
+/*
+ * Onglets disponibles et droits : calcul unique, partagé avec la page de la
+ * liste « Rapports hotline à générer » (cf. PluginStatsMenu::getViews).
+ */
+$views         = PluginStatsMenu::getViews();
+$creditEnabled = $views['enabled']['credits'];
+$viewAccess    = $views['access'];
 
-$satisfactionPluginActive = $plugin->isInstalled('satisfactionclient') && $plugin->isActivated('satisfactionclient');
-$satisfactionQuestionsLoaded = false;
-if ($satisfactionPluginActive) {
-    if (!class_exists('PluginSatisfactionclientQuestion')) {
-        $questionClass = GLPI_ROOT . '/plugins/satisfactionclient/inc/question.class.php';
-        if (file_exists($questionClass)) {
-            include_once $questionClass;
-        }
-    }
-    $satisfactionQuestionsLoaded = class_exists('PluginSatisfactionclientQuestion');
+/*
+ * Aucun onglet affichable : un droit est ouvert, mais sur un onglet dont le
+ * plugin source est absent (droit « Rapports hotline » sans le plugin Credit,
+ * par exemple). Sans ce refus, la page retombait sur l'onglet « tickets »,
+ * affiché à quelqu'un qui n'en a pas le droit.
+ */
+if (!in_array(true, $viewAccess, true)) {
+    throw new \Glpi\Exception\Http\AccessDeniedHttpException();
 }
-$satisfactionEnabled = $satisfactionPluginActive
-    && $satisfactionQuestionsLoaded
-    && $DB->tableExists('glpi_plugin_satisfactionclient_answers');
-
-// Droits par onglet
-$canViewCredits      = $creditEnabled      && Session::haveRight(PluginStatsProfile::RIGHTNAME_CREDITS,      PluginStatsProfile::RIGHT_READ);
-$canViewTickets      =                        Session::haveRight(PluginStatsProfile::RIGHTNAME_TICKETS,      PluginStatsProfile::RIGHT_READ);
-$canViewSatisfaction = $satisfactionEnabled && Session::haveRight(PluginStatsProfile::RIGHTNAME_SATISFACTION, PluginStatsProfile::RIGHT_READ);
 
 // Vue par défaut = premier onglet autorisé
-$defaultView = 'tickets';
-foreach (['credits' => $canViewCredits, 'tickets' => $canViewTickets, 'satisfaction' => $canViewSatisfaction] as $_v => $_ok) {
-    if ($_ok) { $defaultView = $_v; break; }
-}
+$defaultView = (string) array_search(true, $viewAccess, true);
 
 $view = $_GET['view'] ?? $defaultView;
 
 // Validation : si la vue demandée n'est pas autorisée, revenir à la valeur par défaut
-$viewAccess = [
-    'credits'      => $canViewCredits,
-    'tickets'      => $canViewTickets,
-    'satisfaction' => $canViewSatisfaction,
-];
-if (empty($viewAccess[$view])) {
+if (!is_string($view) || empty($viewAccess[$view])) {
     $view = $defaultView;
 }
+
+// La liste hotline a sa propre page, native GLPI : les anciens liens y mènent.
+if ($view === PluginStatsHotline::VIEW) {
+    Html::redirect(PluginStatsMenu::getViewURL($view));
+}
+
 $runStats = isset($_GET['run']) ? (int) $_GET['run'] : 1;
 $dateBegin = $_GET['date_begin'] ?? '';
 $dateEnd = $_GET['date_end'] ?? '';
@@ -187,7 +165,7 @@ $getUserLabel = static function (int $userId): string {
     return (string) $cache[$userId];
 };
 
-// Carte de filtres repliable (commune aux 3 vues) : barre masquee par defaut, bouton pour l'afficher.
+// Carte de filtres repliable (commune aux vues) : barre masquee par defaut, bouton pour l'afficher.
 $openFilterCard = static function (): void {
     echo "<div class='card mb-3 stats-filter-card'>";
     echo "<div class='card-header d-flex justify-content-between align-items-center py-2' role='button' tabindex='0'>";
@@ -240,6 +218,13 @@ $renderFavoritesBar = static function (string $view) use ($favoritesEnabled): vo
 };
 
 if (!$isAjaxRequest && !$isExportRequest) {
+    /*
+     * En-tête GLPI D'ABORD : rien ne doit précéder le <!DOCTYPE html>. Le bloc
+     * de style était émis avant lui, et le navigateur passait toute la page en
+     * mode de compatibilité (« quirks »), que Bootstrap ne prend pas en charge :
+     * marges, centrage et tableaux décalés.
+     */
+    Html::header(__('Stats', 'stats'), $_SERVER['PHP_SELF'], 'tools', 'stats');
     echo "<style>
 .stats-filters .select2-container--default .select2-selection--multiple {
   min-height: 38px;
@@ -284,28 +269,7 @@ if (!$isAjaxRequest && !$isExportRequest) {
   min-width: 12rem;
 }
 </style>";
-    Html::header(__('Stats', 'stats'), $_SERVER['PHP_SELF'], 'tools', 'stats');
-    echo "<div class='card mb-3'><div class='card-body'>";
-    echo "<ul class='nav nav-tabs' role='tablist'>";
-    $tabs = [];
-    if ($canViewCredits) {
-        $tabs['credits'] = __('Stats credits', 'stats');
-    }
-    if ($canViewTickets) {
-        $tabs['tickets'] = __('Stats tickets', 'stats');
-    }
-    if ($canViewSatisfaction) {
-        $tabs['satisfaction'] = __('Stats satisfaction', 'stats');
-    }
-    foreach ($tabs as $tabKey => $label) {
-        $active = $view === $tabKey ? 'active' : '';
-        $url = Html::cleanInputText($CFG_GLPI['root_doc'] . '/plugins/stats/front/stats.php?view=' . $tabKey);
-        echo "<li class='nav-item' role='presentation'>";
-        echo "<a class='nav-link $active' href='$url'>" . $label . "</a>";
-        echo "</li>";
-    }
-    echo "</ul>";
-    echo "</div></div>";
+    PluginStatsMenu::showTabs($view);
 
     // JS commun du bouton replier/deplier des barres de filtre (les 3 vues). Barre fermee par defaut.
     $toggleShowLabel = json_encode(__('Afficher', 'stats'), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
@@ -2393,6 +2357,39 @@ JS;
     } else {
         unset($_SESSION['glpilist_limit']);
     }
+    Html::footer();
+    return;
+}
+
+/*
+ * Statistiques de signature — plugins RP et Gestion.
+ *
+ * Placés ICI, avant la vue « crédits », parce que celle-ci n'est pas gardée par
+ * un `if` : c'est le repli de fin de fichier. Un bloc ajouté après elle ne
+ * s'exécuterait jamais, et un bloc sans `return` laisserait les crédits
+ * s'afficher par-dessus.
+ *
+ * Les closures partagées ci-dessus sont passées telles quelles : les deux vues
+ * réutilisent la carte de filtres, la barre de favoris et les infobulles des
+ * onglets existants, elles n'en refont pas une version parallèle.
+ */
+$signatureHelpers = [
+    'openFilterCard'    => $openFilterCard,
+    'closeFilterCard'   => $closeFilterCard,
+    'favoritesBar'      => $renderFavoritesBar,
+    'infoIcon'          => $infoIcon,
+    'expandEntityScope' => $expandEntityScope,
+    'normalizeIntList'  => $normalizeIntList,
+];
+
+if ($view === 'rp') {
+    PluginStatsRp::show($signatureHelpers);
+    Html::footer();
+    return;
+}
+
+if ($view === 'gestion') {
+    PluginStatsGestion::show($signatureHelpers);
     Html::footer();
     return;
 }
