@@ -42,6 +42,8 @@ La source est une vue SQL, `glpi_plugin_stats_hotlinetickets`. Elle contient cha
 
 La vue est créée à l'installation, ou à la première ouverture de l'onglet si elle manque. Elle est supprimée à la désinstallation, avec les colonnes et les recherches sauvegardées de la liste.
 
+La vue cherche les rapports hotline par numéro de ticket dans `glpi_plugin_rp_cridetails`, une colonne que le plugin `rp` n'indexe pas. Le plugin pose donc l'index `id_ticket_type` (`id_ticket`, `type`) sur cette table : à l'installation, à la mise à jour, et à l'ouverture de la liste s'il manque. Sans lui, la liste mettait environ une minute à s'afficher en production. L'index est conservé à la désinstallation.
+
 Critères à l'ouverture, modifiables comme dans toute liste GLPI :
 - « Crédit consommé » `>1`, soit un crédit supérieur à 1 ;
 - « Crédit » contient « à Mettre en facturation » : le nom du crédit du plugin `credit` sur lequel la consommation est faite. Ce critère et le précédent portent sur la même consommation, car GLPI ne joint qu'une fois la table des consommations : seul ce qui est consommé sur un crédit à facturer compte. Les variantes du nom (`PROV - …`, `z…`, tabulation en tête) sont comprises ;

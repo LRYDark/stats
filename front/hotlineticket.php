@@ -14,43 +14,6 @@
 
 include('../../../inc/includes.php');
 
-// --- DIAGNOSTIC TEMPORAIRE (lenteur) : à retirer ---
-$GLOBALS['stats_probe_t0'] = $_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true);
-$GLOBALS['stats_probe']    = [];
-function stats_probe_mark(string $label): void
-{
-    $GLOBALS['stats_probe'][] = sprintf('[%9.1f ms] %s', (microtime(true) - $GLOBALS['stats_probe_t0']) * 1000, $label);
-}
-stats_probe_mark('includes.php chargé');
-register_shutdown_function(static function (): void {
-    stats_probe_mark('fin de requête');
-    $lines = array_merge(['=== ' . date('c') . ' ' . ($_SERVER['REQUEST_URI'] ?? '') . ' ==='], $GLOBALS['stats_probe']);
-    try {
-        $info    = \Glpi\Debug\Profile::getCurrent()->getDebugInfo();
-        $queries = $info['sql']['queries'] ?? [];
-        $total   = 0.0;
-        foreach ($queries as $q) {
-            $total += (float) $q['time'];
-        }
-        $lines[] = sprintf('SQL : %d requêtes, %.1f ms au total', count($queries), $total);
-        foreach ($queries as $q) {
-            if ((float) $q['time'] >= 200) {
-                $lines[] = sprintf('  #%d %.1f ms (%d lignes) %s', $q['num'], $q['time'], $q['rows'], preg_replace('/\s+/', ' ', mb_substr((string) $q['query'], 0, 1500)));
-            }
-        }
-        foreach ($info['profiler'] ?? [] as $sec) {
-            $d = (float) (($sec['end'] ?? 0) - ($sec['start'] ?? 0));
-            if ($d >= 200) {
-                $lines[] = sprintf('  profiler %s / %s : %.1f', $sec['category'] ?? '', $sec['name'] ?? '', $d);
-            }
-        }
-    } catch (\Throwable $e) {
-        $lines[] = 'debug info : ' . $e->getMessage();
-    }
-    @file_put_contents(GLPI_LOG_DIR . '/stats-probe-page.log', implode("\n", $lines) . "\n\n", FILE_APPEND);
-});
-// --- fin diagnostic ---
-
 Session::checkLoginUser();
 
 if (!PluginStatsHotlineticket::canView()) {
@@ -66,9 +29,7 @@ if (!PluginStatsHotlineticket::canView()) {
 Html::requireJs('tinymce');
 
 // Ouverture sur le nombre de lignes par défaut de l'utilisateur (50).
-stats_probe_mark('droits vérifiés');
 PluginStatsHotline::resetListLimit();
-stats_probe_mark('resetListLimit');
 
 Html::header(
     PluginStatsHotlineticket::getTypeName(Session::getPluralNumber()),
@@ -76,7 +37,6 @@ Html::header(
     'tools',
     'stats'
 );
-stats_probe_mark('Html::header');
 
 /*
  * Mise en page : sur grand écran, GLPI donne à la liste la hauteur exacte de
@@ -112,10 +72,7 @@ echo "<style>
 
 echo "<div class='plugin-stats-hotline'>";
 PluginStatsMenu::showTabs(PluginStatsHotline::VIEW);
-stats_probe_mark('showTabs');
 PluginStatsHotline::show();
-stats_probe_mark('PluginStatsHotline::show');
 echo "</div>";
 
 Html::footer();
-stats_probe_mark('Html::footer');
