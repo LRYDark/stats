@@ -127,8 +127,10 @@ class PluginStatsHotline
                 . "</div>";
         }
 
+        if (function_exists('stats_probe_mark')) { stats_probe_mark('ensureView + entête liste'); } // DIAGNOSTIC TEMPORAIRE
         PluginStatsHotlineticket::forgetRetiredSearch();
         Search::show(PluginStatsHotlineticket::class);
+        if (function_exists('stats_probe_mark')) { stats_probe_mark('Search::show'); } // DIAGNOSTIC TEMPORAIRE
 
         self::tabScript();
     }

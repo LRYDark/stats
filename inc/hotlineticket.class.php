@@ -199,9 +199,47 @@ class PluginStatsHotlineticket extends CommonDBTM implements DefaultSearchReques
             $DB->doQuery('CREATE OR REPLACE VIEW ' . $DB->quoteName($table) . ' AS ' . self::viewSql());
         }
 
+        self::ensureRpIndex();
         self::ensureDisplayPreferences();
 
         return true;
+    }
+
+    /**
+     * Index (`id_ticket`, `type`) sur la table des rapports du plugin RP.
+     *
+     * La vue écarte chaque ticket qui a déjà un rapport hotline (`NOT EXISTS`
+     * sur `id_ticket`). Le plugin RP n'indexe pas cette colonne : la table
+     * entière était relue pour CHAQUE ticket résolu ou clos ayant consommé du
+     * crédit, et pas seulement pour la page affichée, car les critères de
+     * crédit ne s'appliquent qu'après regroupement. Près d'une minute à
+     * l'ouverture de la liste.
+     *
+     * Posé ici, à l'affichage comme la vue, faute de migration côté RP. Tout
+     * index commençant par `id_ticket` suffit : s'il en existe un, rien n'est
+     * ajouté. Un échec ralentit la liste sans la casser : il est journalisé.
+     */
+    private static function ensureRpIndex(): void
+    {
+        global $DB;
+
+        try {
+            $res = $DB->doQuery(
+                'SHOW INDEX FROM ' . $DB->quoteName(self::RP_TABLE)
+                . " WHERE Column_name = 'id_ticket' AND Seq_in_index = 1"
+            );
+            if ($res && $DB->numrows($res) === 0) {
+                $DB->doQuery(
+                    'ALTER TABLE ' . $DB->quoteName(self::RP_TABLE)
+                    . ' ADD INDEX `id_ticket_type` (`id_ticket`, `type`)'
+                );
+            }
+        } catch (\Throwable $e) {
+            Toolbox::logInFile(
+                'plugin-stats',
+                'Rapports hotline à générer (index ' . self::RP_TABLE . ') : ' . $e->getMessage() . "\n"
+            );
+        }
     }
 
     public static function dropView(): void
