@@ -1,6 +1,5 @@
 <?php
 
-include('../../../inc/includes.php');
 /** @var array $CFG_GLPI */
 global $CFG_GLPI, $DB;
 
@@ -43,7 +42,7 @@ $getEntityLabel = static function (int $entityId): string {
         return '';
     }
     if (!array_key_exists($entityId, $cache)) {
-        $cache[$entityId] = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
+        $cache[$entityId] = html_entity_decode(
             Dropdown::getDropdownName('glpi_entities', $entityId)
         );
     }
@@ -161,10 +160,10 @@ $taskDateExpr = $DB->fieldExists($taskTable, 'date')
 if ($dateStart !== '' || $dateStop !== '') {
     $dateCriteria = [];
     if ($dateStart !== '') {
-        $dateCriteria[] = new QueryExpression($taskDateExpr . ' >= ' . $DB->quote($dateStart));
+        $dateCriteria[] = new \Glpi\DBAL\QueryExpression($taskDateExpr . ' >= ' . $DB->quote($dateStart));
     }
     if ($dateStop !== '') {
-        $dateCriteria[] = new QueryExpression($taskDateExpr . ' <= ' . $DB->quote($dateStop));
+        $dateCriteria[] = new \Glpi\DBAL\QueryExpression($taskDateExpr . ' <= ' . $DB->quote($dateStop));
     }
     if (!empty($dateCriteria)) {
         if (!isset($where['AND']) || !is_array($where['AND'])) {
@@ -197,7 +196,7 @@ if ($includeRoute) {
         ],
     ];
     unset($aggWhere["$taskTable.actiontime"]);
-    $aggWhere[] = new QueryExpression(
+    $aggWhere[] = new \Glpi\DBAL\QueryExpression(
         '(' . $DB->quoteName("$taskTable.actiontime") . ' > 0 OR '
         . $DB->quoteName("$routeTable.tasks_id") . ' IS NOT NULL)'
     );
@@ -206,7 +205,7 @@ if ($includeRoute) {
 $rows = [];
 $countRow = $DB->request([
     'SELECT' => [
-        new QueryExpression("COUNT(DISTINCT $ticketTable.id) AS total"),
+        new \Glpi\DBAL\QueryExpression("COUNT(DISTINCT $ticketTable.id) AS total"),
     ],
     'FROM' => $taskTable,
     'LEFT JOIN' => $aggJoins,
@@ -221,13 +220,13 @@ $rowsRequest = [
         "$ticketTable.date AS ticket_date",
         "$ticketTable.status AS ticket_status",
         "$ticketTable.entities_id AS entities_id",
-        new QueryExpression("SUM($taskTable.actiontime) AS total_time"),
+        new \Glpi\DBAL\QueryExpression("SUM($taskTable.actiontime) AS total_time"),
     ],
     'FROM' => $taskTable,
     'LEFT JOIN' => $aggJoins,
     'WHERE' => $aggWhere,
     'GROUPBY' => ["$ticketTable.id"],
-    'ORDER' => [new QueryExpression('total_time DESC')],
+    'ORDER' => [new \Glpi\DBAL\QueryExpression('total_time DESC')],
 ];
 if (!$isExport) {
     $rowsRequest['START'] = $start;
@@ -262,7 +261,7 @@ if ($type === 'tech' && $DB->fieldExists($ticketTable, 'users_id_recipient')) {
     }
     $createdCountRow = $DB->request([
         'SELECT' => [
-            new QueryExpression("COUNT(DISTINCT $ticketTable.id) AS total"),
+            new \Glpi\DBAL\QueryExpression("COUNT(DISTINCT $ticketTable.id) AS total"),
         ],
         'FROM' => $ticketTable,
         'WHERE' => $createdWhere,
@@ -322,7 +321,7 @@ if ($includeCredit) {
         foreach ($DB->request([
             'SELECT' => [
                 "$consumptionTable.$fieldTicket AS ticket_id",
-                new QueryExpression("SUM($consumptionTable.$fieldUsed) AS total_credit"),
+                new \Glpi\DBAL\QueryExpression("SUM($consumptionTable.$fieldUsed) AS total_credit"),
             ],
             'FROM' => $consumptionTable,
             'WHERE' => $creditWhere,
@@ -350,7 +349,7 @@ if ($includeRoute) {
         foreach ($DB->request([
             'SELECT' => [
                 "$taskTable.tickets_id AS ticket_id",
-                new QueryExpression("SUM($routeTable.routetime) AS total_route"),
+                new \Glpi\DBAL\QueryExpression("SUM($routeTable.routetime) AS total_route"),
             ],
             'FROM' => $taskTable,
             'INNER JOIN' => [

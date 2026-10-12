@@ -1,13 +1,12 @@
 <?php
 
-include('../../../inc/includes.php');
 /** @var array $CFG_GLPI */
 /** @var DBmysql $DB */
 global $CFG_GLPI, $DB;
 
 // Accès : au moins un onglet autorisé (même règle que le menu et les favoris)
 if (!PluginStatsMenu::canView()) {
-    Html::displayRightError();
+    throw new \Glpi\Exception\Http\AccessDeniedHttpException();
 }
 
 // Gardé pour la vue tickets (plugin rt, temps de trajet).
@@ -148,7 +147,7 @@ $getEntityLabel = static function (int $entityId): string {
         return '';
     }
     if (!array_key_exists($entityId, $cache)) {
-        $cache[$entityId] = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
+        $cache[$entityId] = html_entity_decode(
             Dropdown::getDropdownName('glpi_entities', $entityId)
         );
     }
@@ -318,7 +317,6 @@ JS;
             'ajaxUrl' => $CFG_GLPI['root_doc'] . '/plugins/stats/ajax/filters.php',
             'baseUrl' => $CFG_GLPI['root_doc'] . '/plugins/stats/front/stats.php',
             'view'    => $view,
-            'csrf'    => Session::getNewCSRFToken(),
             'i18n'    => [
                 'placeholder'   => __('— Mes filtres —', 'stats'),
                 'defaultSuffix' => __('(par defaut)', 'stats'),
@@ -370,8 +368,7 @@ JS;
       credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'X-Requested-With': 'XMLHttpRequest',
-        'X-Glpi-Csrf-Token': cfg.csrf
+        'X-Requested-With': 'XMLHttpRequest'
       },
       body: body.toString()
     })
@@ -402,7 +399,6 @@ JS;
     body.set('name', name);
     body.set('params', currentParams());
     body.set('is_default', (def && def.checked) ? '1' : '0');
-    body.set('_glpi_csrf_token', cfg.csrf);
     post(body, function(d) { if (d.success) { populate(d.filters); } else { window.alert(cfg.i18n.error); } });
   };
 
@@ -414,7 +410,6 @@ JS;
     body.set('action', 'delete');
     body.set('view', cfg.view);
     body.set('id', id);
-    body.set('_glpi_csrf_token', cfg.csrf);
     post(body, function(d) { if (d.success) { populate(d.filters); } });
   };
 
@@ -493,10 +488,10 @@ if ($view === 'tickets') {
     if ($dateStart !== '' || $dateStop !== '') {
         $dateCriteria = [];
         if ($dateStart !== '') {
-            $dateCriteria[] = new QueryExpression($taskDateExpr . ' >= ' . $DB->quote($dateStart));
+            $dateCriteria[] = new \Glpi\DBAL\QueryExpression($taskDateExpr . ' >= ' . $DB->quote($dateStart));
         }
         if ($dateStop !== '') {
-            $dateCriteria[] = new QueryExpression($taskDateExpr . ' <= ' . $DB->quote($dateStop));
+            $dateCriteria[] = new \Glpi\DBAL\QueryExpression($taskDateExpr . ' <= ' . $DB->quote($dateStop));
         }
         if (!empty($dateCriteria)) {
             if (!isset($where['AND']) || !is_array($where['AND'])) {
@@ -592,7 +587,7 @@ if ($view === 'tickets') {
             ],
         ];
         unset($aggWhere["$taskTable.actiontime"]);
-        $aggWhere[] = new QueryExpression(
+        $aggWhere[] = new \Glpi\DBAL\QueryExpression(
             '(' . $DB->quoteName("$taskTable.actiontime") . ' > 0 OR '
             . $DB->quoteName("$routeTable.tasks_id") . ' IS NOT NULL)'
         );
@@ -640,7 +635,7 @@ if ($view === 'tickets') {
                 // (pas de second filtre sur la date de consommation, qui ferait disparaitre des credits reels).
                 $creditRow = $DB->request([
                     'SELECT' => [
-                        new QueryExpression("COALESCE(SUM($consumptionTable.$fieldUsed), 0) AS total_credit"),
+                        new \Glpi\DBAL\QueryExpression("COALESCE(SUM($consumptionTable.$fieldUsed), 0) AS total_credit"),
                     ],
                     'FROM' => $consumptionTable,
                     'WHERE' => $creditWhere,
@@ -655,7 +650,7 @@ if ($view === 'tickets') {
                     foreach ($DB->request([
                         'SELECT' => [
                             "$consumptionTable.users_id AS tech_id",
-                            new QueryExpression("COALESCE(SUM($consumptionTable.$fieldUsed), 0) AS total_credit"),
+                            new \Glpi\DBAL\QueryExpression("COALESCE(SUM($consumptionTable.$fieldUsed), 0) AS total_credit"),
                         ],
                         'FROM' => $consumptionTable,
                         'WHERE' => $creditTechWhere,
@@ -671,7 +666,7 @@ if ($view === 'tickets') {
                 foreach ($DB->request([
                     'SELECT' => [
                         "$ticketTable.entities_id AS entities_id",
-                        new QueryExpression("COALESCE(SUM($consumptionTable.$fieldUsed), 0) AS total_credit"),
+                        new \Glpi\DBAL\QueryExpression("COALESCE(SUM($consumptionTable.$fieldUsed), 0) AS total_credit"),
                     ],
                     'FROM' => $consumptionTable,
                     'LEFT JOIN' => [
@@ -701,11 +696,11 @@ if ($view === 'tickets') {
         $aggSelect = [
             "$taskTable.users_id_tech AS tech_id",
             "$ticketTable.entities_id AS entities_id",
-            new QueryExpression("SUM($taskTable.actiontime) AS total_time"),
-            new QueryExpression("COUNT(DISTINCT $taskTable.tickets_id) AS ticket_count"),
+            new \Glpi\DBAL\QueryExpression("SUM($taskTable.actiontime) AS total_time"),
+            new \Glpi\DBAL\QueryExpression("COUNT(DISTINCT $taskTable.tickets_id) AS ticket_count"),
         ];
         if ($includeRoute) {
-            $aggSelect[] = new QueryExpression("COALESCE(SUM($routeTable.routetime), 0) AS total_route");
+            $aggSelect[] = new \Glpi\DBAL\QueryExpression("COALESCE(SUM($routeTable.routetime), 0) AS total_route");
         }
         foreach ($DB->request([
             'SELECT' => $aggSelect,
@@ -736,7 +731,7 @@ if ($view === 'tickets') {
         foreach ($DB->request([
             'SELECT' => [
                 "$ticketTable.entities_id AS entities_id",
-                new QueryExpression("COUNT(DISTINCT $taskTable.tickets_id) AS ticket_count"),
+                new \Glpi\DBAL\QueryExpression("COUNT(DISTINCT $taskTable.tickets_id) AS ticket_count"),
             ],
             'FROM' => $taskTable,
             'LEFT JOIN' => $aggJoins,
@@ -777,7 +772,7 @@ if ($view === 'tickets') {
                 foreach ($DB->request([
                     'SELECT' => [
                         "$ticketTable.users_id_recipient AS tech_id",
-                        new QueryExpression("COUNT(DISTINCT $ticketTable.id) AS created_ticket_count"),
+                        new \Glpi\DBAL\QueryExpression("COUNT(DISTINCT $ticketTable.id) AS created_ticket_count"),
                     ],
                     'FROM' => $ticketTable,
                     'WHERE' => $createdWhere,
@@ -1158,7 +1153,7 @@ if ($view === 'tickets') {
     echo "<div class='col-md-4'>";
     echo "<label class='form-label mb-1'>" . __('Mots-cles', 'stats') . "</label>";
     echo "<input type='text' class='form-control' name='keywords' value='"
-        . Html::cleanInputText($keywords) . "' placeholder='"
+        . htmlescape($keywords) . "' placeholder='"
         . htmlescape(__('Mots-cles (separes par des espaces)', 'stats')) . "'>";
     echo "</div>";
     echo "<div class='col-md-3'>";
@@ -1290,9 +1285,11 @@ if ($view === 'tickets') {
     $noDataMessage = __('Aucune donnee a afficher.', 'stats');
 
     $echartsUrls = [
-        Html::cleanInputText($CFG_GLPI['root_doc'] . '/lib/echarts.min.js'),
-        Html::cleanInputText($CFG_GLPI['root_doc'] . '/public/lib/echarts.min.js'),
+        htmlescape($CFG_GLPI['root_doc'] . '/lib/echarts.min.js'),
+        htmlescape($CFG_GLPI['root_doc'] . '/public/lib/echarts.min.js'),
         '/lib/echarts.min.js',
+        // GLPI installe depuis les sources : la version minifiee n'est pas generee.
+        htmlescape($CFG_GLPI['root_doc'] . '/lib/echarts.js'),
     ];
     $echartsUrlsJson = json_encode($echartsUrls, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
     $ajaxUrlJson = json_encode($ajaxUrl, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
@@ -1650,8 +1647,8 @@ if ($view === 'satisfaction') {
 
     $summary = $DB->request([
         'SELECT' => [
-            new QueryExpression('COUNT(*) AS responses'),
-            new QueryExpression('AVG(CAST(answer_value AS DECIMAL(10,2))) AS avg_value'),
+            new \Glpi\DBAL\QueryExpression('COUNT(*) AS responses'),
+            new \Glpi\DBAL\QueryExpression('AVG(CAST(answer_value AS DECIMAL(10,2))) AS avg_value'),
         ],
         'FROM' => $answersTable,
         'WHERE' => $baseWhere,
@@ -1667,15 +1664,15 @@ if ($view === 'satisfaction') {
     foreach ($DB->request([
         'SELECT' => [
             'users_id_technician AS tech_id',
-            new QueryExpression('COUNT(*) AS responses'),
-            new QueryExpression('AVG(CAST(answer_value AS DECIMAL(10,2))) AS avg_value'),
+            new \Glpi\DBAL\QueryExpression('COUNT(*) AS responses'),
+            new \Glpi\DBAL\QueryExpression('AVG(CAST(answer_value AS DECIMAL(10,2))) AS avg_value'),
         ],
         'FROM' => $answersTable,
         'WHERE' => $techWhere,
         'GROUPBY' => ['users_id_technician'],
         'ORDER' => [
-            new QueryExpression('avg_value ASC'),
-            new QueryExpression('responses DESC'),
+            new \Glpi\DBAL\QueryExpression('avg_value ASC'),
+            new \Glpi\DBAL\QueryExpression('responses DESC'),
         ],
     ]) as $row) {
         $techRows[] = [
@@ -1693,15 +1690,15 @@ if ($view === 'satisfaction') {
     foreach ($DB->request([
         'SELECT' => [
             'entities_id',
-            new QueryExpression('COUNT(*) AS responses'),
-            new QueryExpression('AVG(CAST(answer_value AS DECIMAL(10,2))) AS avg_value'),
+            new \Glpi\DBAL\QueryExpression('COUNT(*) AS responses'),
+            new \Glpi\DBAL\QueryExpression('AVG(CAST(answer_value AS DECIMAL(10,2))) AS avg_value'),
         ],
         'FROM' => $answersTable,
         'WHERE' => $entityWhere,
         'GROUPBY' => ['entities_id'],
         'ORDER' => [
-            new QueryExpression('avg_value ASC'),
-            new QueryExpression('responses DESC'),
+            new \Glpi\DBAL\QueryExpression('avg_value ASC'),
+            new \Glpi\DBAL\QueryExpression('responses DESC'),
         ],
     ]) as $row) {
         $entityRows[] = [
@@ -2265,9 +2262,11 @@ JS;
     ];
     $chartsJson = json_encode($chartsPayload, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
     $echartsUrls = [
-        Html::cleanInputText($CFG_GLPI['root_doc'] . '/lib/echarts.min.js'),
-        Html::cleanInputText($CFG_GLPI['root_doc'] . '/public/lib/echarts.min.js'),
+        htmlescape($CFG_GLPI['root_doc'] . '/lib/echarts.min.js'),
+        htmlescape($CFG_GLPI['root_doc'] . '/public/lib/echarts.min.js'),
         '/lib/echarts.min.js',
+        // GLPI installe depuis les sources : la version minifiee n'est pas generee.
+        htmlescape($CFG_GLPI['root_doc'] . '/lib/echarts.js'),
     ];
     $echartsUrlsJson = json_encode($echartsUrls, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
     $chartsJs = <<<JS
@@ -2467,18 +2466,18 @@ $topEntities = [];
 $topEntityLabels = [];
 
 $statsSelect = [
-    new QueryExpression('COUNT(*) AS total'),
-    new QueryExpression('COALESCE(SUM(quantity_sold), 0) AS total_sold'),
-    new QueryExpression('COALESCE(SUM(quantity_used), 0) AS total_used'),
-    new QueryExpression('COALESCE(SUM(CASE WHEN quantity_used > 0 THEN 1 ELSE 0 END), 0) AS used_count'),
-    new QueryExpression('COALESCE(SUM(CASE WHEN quantity_used = 0 THEN 1 ELSE 0 END), 0) AS unused_count'),
-    new QueryExpression('COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_count'),
-    new QueryExpression('COALESCE(SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END), 0) AS inactive_count'),
-    new QueryExpression("COALESCE(SUM(CASE WHEN client_label LIKE 'PROV%' THEN 1 ELSE 0 END), 0) AS prov_count"),
-    new QueryExpression("COALESCE(SUM(CASE WHEN status = 'OK' THEN 1 ELSE 0 END), 0) AS status_ok"),
-    new QueryExpression("COALESCE(SUM(CASE WHEN status = 'WARNING' THEN 1 ELSE 0 END), 0) AS status_warning"),
-    new QueryExpression("COALESCE(SUM(CASE WHEN status = 'OVER' THEN 1 ELSE 0 END), 0) AS status_over"),
-    new QueryExpression("COALESCE(SUM(CASE WHEN status = 'EXPIRED' THEN 1 ELSE 0 END), 0) AS status_expired"),
+    new \Glpi\DBAL\QueryExpression('COUNT(*) AS total'),
+    new \Glpi\DBAL\QueryExpression('COALESCE(SUM(quantity_sold), 0) AS total_sold'),
+    new \Glpi\DBAL\QueryExpression('COALESCE(SUM(quantity_used), 0) AS total_used'),
+    new \Glpi\DBAL\QueryExpression('COALESCE(SUM(CASE WHEN quantity_used > 0 THEN 1 ELSE 0 END), 0) AS used_count'),
+    new \Glpi\DBAL\QueryExpression('COALESCE(SUM(CASE WHEN quantity_used = 0 THEN 1 ELSE 0 END), 0) AS unused_count'),
+    new \Glpi\DBAL\QueryExpression('COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_count'),
+    new \Glpi\DBAL\QueryExpression('COALESCE(SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END), 0) AS inactive_count'),
+    new \Glpi\DBAL\QueryExpression("COALESCE(SUM(CASE WHEN client_label LIKE 'PROV%' THEN 1 ELSE 0 END), 0) AS prov_count"),
+    new \Glpi\DBAL\QueryExpression("COALESCE(SUM(CASE WHEN status = 'OK' THEN 1 ELSE 0 END), 0) AS status_ok"),
+    new \Glpi\DBAL\QueryExpression("COALESCE(SUM(CASE WHEN status = 'WARNING' THEN 1 ELSE 0 END), 0) AS status_warning"),
+    new \Glpi\DBAL\QueryExpression("COALESCE(SUM(CASE WHEN status = 'OVER' THEN 1 ELSE 0 END), 0) AS status_over"),
+    new \Glpi\DBAL\QueryExpression("COALESCE(SUM(CASE WHEN status = 'EXPIRED' THEN 1 ELSE 0 END), 0) AS status_expired"),
 ];
 
 if ($shouldRunCredits) {
@@ -2562,8 +2561,8 @@ if ($shouldRunCredits) {
             ],
             'FROM' => $creditsView,
             'ORDER' => [
-                new QueryExpression('percentage_used DESC'),
-                new QueryExpression('quantity_used DESC'),
+                new \Glpi\DBAL\QueryExpression('percentage_used DESC'),
+                new \Glpi\DBAL\QueryExpression('quantity_used DESC'),
             ],
             'LIMIT' => 5,
         ];
@@ -2582,12 +2581,12 @@ if ($shouldRunCredits) {
         $topEntitiesCriteria = [
             'SELECT' => [
                 'entities_id',
-                new QueryExpression('COALESCE(SUM(quantity_used), 0) AS total_used'),
-                new QueryExpression('COALESCE(SUM(quantity_sold), 0) AS total_sold'),
+                new \Glpi\DBAL\QueryExpression('COALESCE(SUM(quantity_used), 0) AS total_used'),
+                new \Glpi\DBAL\QueryExpression('COALESCE(SUM(quantity_sold), 0) AS total_sold'),
             ],
             'FROM' => $creditsView,
             'GROUPBY' => ['entities_id'],
-            'ORDER' => [new QueryExpression('total_used DESC')],
+            'ORDER' => [new \Glpi\DBAL\QueryExpression('total_used DESC')],
             'LIMIT' => 8,
         ];
         if (!empty($baseCreditsWhere)) {
@@ -2908,9 +2907,11 @@ $chartsPayload = [
 ];
 $chartsJson = json_encode($chartsPayload, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
 $echartsUrls = [
-    Html::cleanInputText($CFG_GLPI['root_doc'] . '/lib/echarts.min.js'),
-    Html::cleanInputText($CFG_GLPI['root_doc'] . '/public/lib/echarts.min.js'),
+    htmlescape($CFG_GLPI['root_doc'] . '/lib/echarts.min.js'),
+    htmlescape($CFG_GLPI['root_doc'] . '/public/lib/echarts.min.js'),
     '/lib/echarts.min.js',
+    // GLPI installe depuis les sources : la version minifiee n'est pas generee.
+    htmlescape($CFG_GLPI['root_doc'] . '/lib/echarts.js'),
 ];
 $echartsUrlsJson = json_encode($echartsUrls, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
 $chartsJs = <<<JS

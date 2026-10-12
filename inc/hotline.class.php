@@ -433,11 +433,6 @@ class PluginStatsHotline
   var pending = null; // envoi en cours dont l'adresse est à rétablir
   var STORE = 'statsHotlinePending';
 
-  var token = function () {
-    if (typeof window.getAjaxCsrfToken === 'function') { return window.getAjaxCsrfToken(); }
-    var meta = document.querySelector('meta[property="glpi:csrf_token"]');
-    return meta ? meta.getAttribute('content') : '';
-  };
   var readPending = function () {
     try { return JSON.parse(window.sessionStorage.getItem(STORE) || '{}') || {}; } catch (e) { return {}; }
   };
@@ -510,8 +505,7 @@ class PluginStatsHotline
       credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'X-Requested-With': 'XMLHttpRequest',
-        'X-Glpi-Csrf-Token': token()
+        'X-Requested-With': 'XMLHttpRequest'
       },
       body: body.toString()
     }).then(function (r) { return r.json(); }).then(function (res) {
@@ -578,13 +572,8 @@ JS;
   var running = false;
   var stopAsked = false;
 
-  var token = function () {
-    if (typeof window.getAjaxCsrfToken === 'function') { return window.getAjaxCsrfToken(); }
-    var meta = document.querySelector('meta[property="glpi:csrf_token"]');
-    return meta ? meta.getAttribute('content') : '';
-  };
   var ajaxHeaders = function (extra) {
-    var h = { 'X-Requested-With': 'XMLHttpRequest', 'X-Glpi-Csrf-Token': token() };
+    var h = { 'X-Requested-With': 'XMLHttpRequest' };
     Object.keys(extra || {}).forEach(function (k) { h[k] = extra[k]; });
     return h;
   };

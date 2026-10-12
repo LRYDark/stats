@@ -1,6 +1,5 @@
 <?php
 
-include('../../../inc/includes.php');
 /** @var array $CFG_GLPI */
 /** @var DBmysql $DB */
 global $CFG_GLPI, $DB;
@@ -17,7 +16,7 @@ $getEntityLabel = static function (int $entityId): string {
         return '';
     }
     if (!array_key_exists($entityId, $cache)) {
-        $cache[$entityId] = \Glpi\Toolbox\Sanitizer::decodeHtmlSpecialChars(
+        $cache[$entityId] = html_entity_decode(
             Dropdown::getDropdownName('glpi_entities', $entityId)
         );
     }
@@ -196,7 +195,7 @@ $_SESSION['glpilist_limit'] = $listLimit;
 
 $countRow = $DB->request([
     'SELECT' => [
-        new QueryExpression(
+        new \Glpi\DBAL\QueryExpression(
             $isExport
                 ? "COUNT(DISTINCT CONCAT($answersTable.tickets_id,'|',$answersTable.date_answered)) AS total"
                 : "COUNT(DISTINCT $answersTable.tickets_id) AS total"
@@ -216,10 +215,10 @@ if ($isExport) {
             "$ticketTable.name AS ticket_name",
             "$ticketTable.date AS ticket_date",
             "$ticketTable.status AS ticket_status",
-            new QueryExpression("MAX($answersTable.entities_id) AS entities_id"),
-            new QueryExpression("MAX($answersTable.users_id_technician) AS tech_id"),
-            new QueryExpression("MAX($answersTable.answer_value) AS answer_value"),
-            new QueryExpression("MAX($answersTable.answer_text) AS answer_text"),
+            new \Glpi\DBAL\QueryExpression("MAX($answersTable.entities_id) AS entities_id"),
+            new \Glpi\DBAL\QueryExpression("MAX($answersTable.users_id_technician) AS tech_id"),
+            new \Glpi\DBAL\QueryExpression("MAX($answersTable.answer_value) AS answer_value"),
+            new \Glpi\DBAL\QueryExpression("MAX($answersTable.answer_text) AS answer_text"),
             "$answersTable.date_answered AS date_answered",
         ],
         'FROM' => $answersTable,
@@ -235,9 +234,9 @@ if ($isExport) {
             "$ticketTable.name AS ticket_name",
             "$ticketTable.date AS ticket_date",
             "$ticketTable.status AS ticket_status",
-            new QueryExpression("MAX($answersTable.entities_id) AS entities_id"),
-            new QueryExpression("MAX($answersTable.users_id_technician) AS tech_id"),
-            new QueryExpression("MAX($answersTable.date_answered) AS date_answered"),
+            new \Glpi\DBAL\QueryExpression("MAX($answersTable.entities_id) AS entities_id"),
+            new \Glpi\DBAL\QueryExpression("MAX($answersTable.users_id_technician) AS tech_id"),
+            new \Glpi\DBAL\QueryExpression("MAX($answersTable.date_answered) AS date_answered"),
         ],
         'FROM' => $answersTable,
         'LEFT JOIN' => $joins,

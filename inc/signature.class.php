@@ -294,9 +294,11 @@ class PluginStatsSignature
 
         $payload = json_encode($charts, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
         $urls    = json_encode([
-            Html::cleanInputText($CFG_GLPI['root_doc'] . '/lib/echarts.min.js'),
-            Html::cleanInputText($CFG_GLPI['root_doc'] . '/public/lib/echarts.min.js'),
+            htmlescape($CFG_GLPI['root_doc'] . '/lib/echarts.min.js'),
+            htmlescape($CFG_GLPI['root_doc'] . '/public/lib/echarts.min.js'),
             '/lib/echarts.min.js',
+            // GLPI installe depuis les sources : la version minifiee n'est pas generee.
+            htmlescape($CFG_GLPI['root_doc'] . '/lib/echarts.js'),
         ], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
 
         $js = <<<JS

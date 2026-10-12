@@ -24,7 +24,7 @@ use Glpi\Search\DefaultSearchRequestInterface;
  */
 class PluginStatsHotlineticket extends CommonDBTM implements DefaultSearchRequestInterface
 {
-    public static $rightname = PluginStatsProfile::RIGHTNAME_HOTLINE;
+    public static string $rightname = PluginStatsProfile::RIGHTNAME_HOTLINE;
 
     /** Type « rapport hotline » dans la table des rapports du plugin RP. */
     public const RP_TYPE_HOTLINE = 2;

@@ -16,7 +16,7 @@ class PluginStatsProfile extends Profile
     public const RIGHT_READ = 1;
 
     // Utilisé par GLPI pour les méthodes canXxx() héritées
-    public static $rightname = self::RIGHTNAME_TICKETS;
+    public static string $rightname = self::RIGHTNAME_TICKETS;
 
     public static function getTypeName($nb = 0)
     {

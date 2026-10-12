@@ -3,7 +3,7 @@
 class PluginStatsMenu extends CommonGLPI
 {
     // Droit de secours pour les méthodes canXxx() héritées
-    public static $rightname = PluginStatsProfile::RIGHTNAME_TICKETS;
+    public static string $rightname = PluginStatsProfile::RIGHTNAME_TICKETS;
 
     public static function getMenuName()
     {

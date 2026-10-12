@@ -1,6 +1,5 @@
 <?php
 
-include('../../../inc/includes.php');
 /** @var array $CFG_GLPI */
 /** @var DBmysql $DB */
 global $CFG_GLPI, $DB;
@@ -61,7 +60,7 @@ if ($questionKey !== '') {
     }
     foreach ($DB->request([
         'SELECT' => [
-            new QueryExpression("DISTINCT $answersTable.date_answered AS date_answered"),
+            new \Glpi\DBAL\QueryExpression("DISTINCT $answersTable.date_answered AS date_answered"),
         ],
         'FROM' => $answersTable,
         'WHERE' => $dateWhere,

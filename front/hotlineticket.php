@@ -12,7 +12,6 @@
  * passer d'un onglet à l'autre (cf. PluginStatsMenu::showTabs).
  */
 
-include('../../../inc/includes.php');
 
 Session::checkLoginUser();
 

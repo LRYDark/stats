@@ -9,10 +9,10 @@
 class PluginStatsFilter extends CommonDBTM
 {
     // Droit de secours pour les helpers herites ; l'isolation reelle se fait par users_id.
-    public static $rightname = PluginStatsProfile::RIGHTNAME_TICKETS;
+    public static string $rightname = PluginStatsProfile::RIGHTNAME_TICKETS;
 
     // Pas d'historique : on ne veut pas polluer glpi_logs a chaque sauvegarde de filtre.
-    public $dohistory = false;
+    public bool $dohistory = false;
 
     public static function getTable($classname = null)
     {

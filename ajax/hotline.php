@@ -3,7 +3,7 @@
 /**
  * Onglet « Rapports hotline à générer » : appels de la page.
  *
- * Actions (POST, jeton CSRF en en-tête comme tout appel AJAX de GLPI) :
+ * Actions (POST) :
  *   - check    : le ticket a-t-il déjà un rapport hotline ? (lecture seule)
  *   - finalize : après une génération, retrouve le rapport et rattache son PDF
  *                au ticket ; `collect_messages=1` rend aussi les messages que
@@ -12,7 +12,6 @@
  * Réponses JSON : { status: todo|exists|done|missing|forbidden|error, ... }
  */
 
-include('../../../inc/includes.php');
 
 header('Content-Type: application/json; charset=utf-8');
 Html::header_nocache();

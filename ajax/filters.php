@@ -6,13 +6,12 @@
  * Actions (parametre `action`) :
  *   - list   (GET)  : liste des favoris de l'utilisateur connecte pour une `view`.
  *   - get    (GET)  : params d'un favori precis (appartenant a l'utilisateur).
- *   - save   (POST) : cree/met a jour un favori (CSRF requis).
- *   - delete (POST) : supprime un favori de l'utilisateur (CSRF requis).
+ *   - save   (POST) : cree/met a jour un favori.
+ *   - delete (POST) : supprime un favori de l'utilisateur.
  *
- * Toutes les reponses sont en JSON et incluent un champ `csrf` (token rafraichi).
+ * Toutes les reponses sont en JSON.
  */
 
-include('../../../inc/includes.php');
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -32,7 +31,6 @@ $users_id = (int) Session::getLoginUserID();
 $action   = (string) ($_REQUEST['action'] ?? '');
 
 $respond = static function (array $payload): void {
-    $payload['csrf'] = Session::getNewCSRFToken();
     echo json_encode($payload, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT);
     exit;
 };
@@ -56,8 +54,8 @@ switch ($action) {
         break;
 
     case 'save':
-        // Protection CSRF assuree en amont par GLPI (CheckCsrfListener) : la requete AJAX
-        // envoie le token dans l'en-tete X-Glpi-Csrf-Token (valide avec preserve_token=true).
+        // Protection CSRF assuree en amont par GLPI (CheckCsrfListener) : depuis GLPI 12, il
+        // verifie l'origine de la requete (en-tetes Sec-Fetch-Site / Origin), sans jeton.
         $name      = (string) ($_POST['name'] ?? '');
         $view      = (string) ($_POST['view'] ?? 'tickets');
         $params    = (string) ($_POST['params'] ?? '');

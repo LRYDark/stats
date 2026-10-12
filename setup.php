@@ -1,14 +1,13 @@
 <?php
 
-define('PLUGIN_STATS_VERSION', '1.0.6');
-define('PLUGIN_STATS_MIN_GLPI', '11.0.0');
-define('PLUGIN_STATS_MAX_GLPI', '11.0.99');
+define('PLUGIN_STATS_VERSION', '1.1.0');
+define('PLUGIN_STATS_MIN_GLPI', '12.0.0');
+define('PLUGIN_STATS_MAX_GLPI', '12.0.99');
 
 function plugin_init_stats()
 {
     global $PLUGIN_HOOKS;
 
-    $PLUGIN_HOOKS['csrf_compliant']['stats'] = true;
     $PLUGIN_HOOKS['change_profile']['stats'] = [PluginStatsProfile::class, 'initProfile'];
 
     $plugin = new Plugin();

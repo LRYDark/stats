@@ -9,7 +9,6 @@
  * produits par le plugin RP.
  */
 
-include('../../../inc/includes.php');
 
 Session::checkLoginUser();
 
